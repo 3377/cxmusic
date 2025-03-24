@@ -1,6 +1,6 @@
+import { colors } from '@/constants/tokens'
 import { logError, logInfo } from '@/helpers/logger'
 import { getCurrentWebDAVServer } from '@/helpers/webdavService'
-import { useTheme } from '@/hooks/useTheme'
 import { Feather } from '@expo/vector-icons'
 import { Redirect, Stack, useRouter } from 'expo-router'
 import { useCallback, useEffect, useState } from 'react'
@@ -64,7 +64,6 @@ export default function WebDavLayout() {
 	const router = useRouter()
 	const [isLoading, setIsLoading] = useState(true)
 	const [hasError, setHasError] = useState(false)
-	const theme = useTheme()
 	const insets = useSafeAreaInsets()
 
 	const onSettingsPress = useCallback(() => {
@@ -109,12 +108,12 @@ export default function WebDavLayout() {
 					flex: 1,
 					justifyContent: 'center',
 					alignItems: 'center',
-					backgroundColor: theme.colors.background,
+					backgroundColor: colors.background,
 					paddingTop: insets.top,
 				}}
 			>
-				<ActivityIndicator size="large" color={theme.colors.primary} />
-				<Text style={{ color: theme.colors.text, marginTop: 16 }}>正在加载WebDAV服务...</Text>
+				<ActivityIndicator size="large" color={colors.primary} />
+				<Text style={{ color: colors.text, marginTop: 16 }}>正在加载WebDAV服务...</Text>
 			</View>
 		)
 	}
@@ -126,35 +125,33 @@ export default function WebDavLayout() {
 					flex: 1,
 					justifyContent: 'center',
 					alignItems: 'center',
-					backgroundColor: theme.colors.background,
+					backgroundColor: colors.background,
 					paddingTop: insets.top,
 				}}
 			>
-				<Feather name="alert-circle" size={48} color={theme.colors.error} />
-				<Text style={{ color: theme.colors.text, marginTop: 16 }}>
-					WebDAV服务未配置或初始化失败
-				</Text>
+				<Feather name="alert-circle" size={48} color="red" />
+				<Text style={{ color: colors.text, marginTop: 16 }}>WebDAV服务未配置或初始化失败</Text>
 				<TouchableRipple
 					onPress={checkWebDAVServiceReady}
 					style={{
 						padding: 12,
-						backgroundColor: theme.colors.primary,
+						backgroundColor: colors.primary,
 						borderRadius: 8,
 						marginTop: 16,
 					}}
 				>
-					<Text style={{ color: theme.colors.onPrimary }}>重试</Text>
+					<Text style={{ color: 'white' }}>重试</Text>
 				</TouchableRipple>
 				<TouchableRipple
 					onPress={onSettingsPress}
 					style={{
 						padding: 12,
-						backgroundColor: theme.colors.secondary,
+						backgroundColor: colors.primary,
 						borderRadius: 8,
 						marginTop: 8,
 					}}
 				>
-					<Text style={{ color: theme.colors.onSecondary }}>配置WebDAV</Text>
+					<Text style={{ color: 'white' }}>配置WebDAV</Text>
 				</TouchableRipple>
 			</View>
 		)
@@ -171,7 +168,7 @@ export default function WebDavLayout() {
 									onPress={onSettingsPress}
 									style={{ padding: 8, marginRight: 8, borderRadius: 20 }}
 								>
-									<Feather name="settings" size={24} color={theme.colors.text} />
+									<Feather name="settings" size={24} color={colors.text} />
 								</TouchableRipple>
 							)
 						} catch (error) {

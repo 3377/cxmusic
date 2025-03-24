@@ -9,7 +9,6 @@ import {
 	setDefaultWebDAVServer,
 	useWebDAVServers,
 } from '@/helpers/webdavService'
-import { useTheme } from '@/hooks/useTheme'
 import { showToast } from '@/utils/utils'
 import { Feather, Ionicons } from '@expo/vector-icons'
 import { useRouter } from 'expo-router'
@@ -46,29 +45,26 @@ class ErrorBoundary extends React.Component {
 	}
 
 	render() {
-		const theme = useTheme()
 		if (this.state.hasError) {
 			return (
 				<View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', padding: 20 }}>
-					<Feather name="alert-triangle" size={48} color={theme.colors.error} />
-					<Text
-						style={{ marginTop: 16, color: theme.colors.text, textAlign: 'center', fontSize: 16 }}
-					>
+					<Feather name="alert-triangle" size={48} color="red" />
+					<Text style={{ marginTop: 16, color: colors.text, textAlign: 'center', fontSize: 16 }}>
 						WebDAV设置页面加载失败
 					</Text>
-					<Text style={{ marginTop: 8, color: theme.colors.textSecondary, textAlign: 'center' }}>
+					<Text style={{ marginTop: 8, color: colors.textMuted, textAlign: 'center' }}>
 						{this.state.error?.message || '未知错误'}
 					</Text>
 					<TouchableRipple
 						onPress={this.retry}
 						style={{
 							marginTop: 16,
-							backgroundColor: theme.colors.primary,
+							backgroundColor: colors.primary,
 							padding: 12,
 							borderRadius: 8,
 						}}
 					>
-						<Text style={{ color: theme.colors.onPrimary }}>重试</Text>
+						<Text style={{ color: 'white' }}>重试</Text>
 					</TouchableRipple>
 				</View>
 			)

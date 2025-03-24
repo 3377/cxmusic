@@ -1,7 +1,7 @@
+import { colors } from '@/constants/tokens'
 import { logError, logInfo } from '@/helpers/logger'
 import { getCurrentWebDAVServer, webdavFileToMusicItem } from '@/helpers/webdavService'
 import { usePlayer } from '@/hooks/usePlayer'
-import { useTheme } from '@/hooks/useTheme'
 import { formatBytes } from '@/utils/formatter'
 import { Feather } from '@expo/vector-icons'
 import { useRouter } from 'expo-router'
@@ -23,7 +23,6 @@ const formatDate = (dateString: string) => {
 
 // 文件项组件
 function FileItem({ file, onPress, onLongPress }) {
-	const theme = useTheme()
 	const isDirectory = file.type === 'directory'
 
 	return (
@@ -34,19 +33,19 @@ function FileItem({ file, onPress, onLongPress }) {
 				paddingVertical: 12,
 				paddingHorizontal: 16,
 				borderBottomWidth: 1,
-				borderBottomColor: theme.colors.border,
+				borderBottomColor: '#333',
 			}}
 		>
 			<View style={{ flexDirection: 'row', alignItems: 'center' }}>
 				<Feather
 					name={isDirectory ? 'folder' : 'file'}
 					size={24}
-					color={isDirectory ? theme.colors.primary : theme.colors.text}
+					color={isDirectory ? colors.primary : colors.text}
 					style={{ marginRight: 12 }}
 				/>
 				<View style={{ flex: 1 }}>
-					<Text style={{ color: theme.colors.text, fontSize: 16 }}>{file.basename}</Text>
-					<Text style={{ color: theme.colors.textSecondary, fontSize: 12 }}>
+					<Text style={{ color: colors.text, fontSize: 16 }}>{file.basename}</Text>
+					<Text style={{ color: colors.textMuted, fontSize: 12 }}>
 						{isDirectory ? '文件夹' : formatBytes(file.size || 0)} • {formatDate(file.lastmod)}
 					</Text>
 				</View>
@@ -57,32 +56,30 @@ function FileItem({ file, onPress, onLongPress }) {
 
 // 加载中占位符组件
 function LoadingPlaceholder() {
-	const theme = useTheme()
 	return (
 		<View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', padding: 20 }}>
-			<ActivityIndicator size="large" color={theme.colors.primary} />
-			<Text style={{ marginTop: 16, color: theme.colors.text }}>正在加载文件...</Text>
+			<ActivityIndicator size="large" color={colors.primary} />
+			<Text style={{ marginTop: 16, color: colors.text }}>正在加载文件...</Text>
 		</View>
 	)
 }
 
 // 空内容组件
 function EmptyContent({ onRefresh }) {
-	const theme = useTheme()
 	return (
 		<View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', padding: 20 }}>
-			<Feather name="inbox" size={48} color={theme.colors.textSecondary} />
-			<Text style={{ marginTop: 16, color: theme.colors.text, fontSize: 16 }}>文件夹为空</Text>
+			<Feather name="inbox" size={48} color={colors.textMuted} />
+			<Text style={{ marginTop: 16, color: colors.text, fontSize: 16 }}>文件夹为空</Text>
 			<TouchableRipple
 				onPress={onRefresh}
 				style={{
 					marginTop: 16,
-					backgroundColor: theme.colors.primary,
+					backgroundColor: colors.primary,
 					padding: 12,
 					borderRadius: 8,
 				}}
 			>
-				<Text style={{ color: theme.colors.onPrimary }}>刷新</Text>
+				<Text style={{ color: '#fff' }}>刷新</Text>
 			</TouchableRipple>
 		</View>
 	)
@@ -108,29 +105,26 @@ class ErrorCatcher extends React.Component {
 	}
 
 	render() {
-		const theme = useTheme()
 		if (this.state.hasError) {
 			return (
 				<View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', padding: 20 }}>
-					<Feather name="alert-triangle" size={48} color={theme.colors.error} />
-					<Text
-						style={{ marginTop: 16, color: theme.colors.text, textAlign: 'center', fontSize: 16 }}
-					>
+					<Feather name="alert-triangle" size={48} color="red" />
+					<Text style={{ marginTop: 16, color: colors.text, textAlign: 'center', fontSize: 16 }}>
 						WebDAV页面加载失败
 					</Text>
-					<Text style={{ marginTop: 8, color: theme.colors.textSecondary, textAlign: 'center' }}>
+					<Text style={{ marginTop: 8, color: colors.textMuted, textAlign: 'center' }}>
 						{this.state.error?.message || '未知错误'}
 					</Text>
 					<TouchableRipple
 						onPress={this.retry}
 						style={{
 							marginTop: 16,
-							backgroundColor: theme.colors.primary,
+							backgroundColor: colors.primary,
 							padding: 12,
 							borderRadius: 8,
 						}}
 					>
-						<Text style={{ color: theme.colors.onPrimary }}>重试</Text>
+						<Text style={{ color: '#fff' }}>重试</Text>
 					</TouchableRipple>
 				</View>
 			)
@@ -143,7 +137,6 @@ class ErrorCatcher extends React.Component {
 export default function WebDavScreen() {
 	const router = useRouter()
 	const player = usePlayer()
-	const theme = useTheme()
 
 	const [currentPath, setCurrentPath] = useState('/')
 	const [files, setFiles] = useState([])
@@ -259,7 +252,7 @@ export default function WebDavScreen() {
 	// 渲染页面
 	return (
 		<ErrorCatcher onRetry={refreshFiles}>
-			<View style={{ flex: 1, backgroundColor: theme.colors.background }}>
+			<View style={{ flex: 1, backgroundColor: colors.background }}>
 				{/* 路径显示和导航 */}
 				<View
 					style={{
@@ -267,19 +260,19 @@ export default function WebDavScreen() {
 						alignItems: 'center',
 						padding: 16,
 						borderBottomWidth: 1,
-						borderBottomColor: theme.colors.border,
+						borderBottomColor: '#333',
 					}}
 				>
 					{currentPath !== '/' && (
 						<TouchableOpacity onPress={handleGoBack} style={{ marginRight: 8 }}>
-							<Feather name="arrow-left" size={20} color={theme.colors.primary} />
+							<Feather name="arrow-left" size={20} color={colors.primary} />
 						</TouchableOpacity>
 					)}
-					<Text style={{ flex: 1, color: theme.colors.text }}>
+					<Text style={{ flex: 1, color: colors.text }}>
 						{currentPath === '/' ? '根目录' : currentPath}
 					</Text>
 					<TouchableOpacity onPress={refreshFiles}>
-						<Feather name="refresh-cw" size={20} color={theme.colors.primary} />
+						<Feather name="refresh-cw" size={20} color={colors.primary} />
 					</TouchableOpacity>
 				</View>
 
@@ -288,20 +281,18 @@ export default function WebDavScreen() {
 					<LoadingPlaceholder />
 				) : error ? (
 					<View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', padding: 20 }}>
-						<Feather name="alert-circle" size={48} color={theme.colors.error} />
-						<Text style={{ marginTop: 16, color: theme.colors.text, textAlign: 'center' }}>
-							{error}
-						</Text>
+						<Feather name="alert-circle" size={48} color="red" />
+						<Text style={{ marginTop: 16, color: colors.text, textAlign: 'center' }}>{error}</Text>
 						<TouchableRipple
 							onPress={refreshFiles}
 							style={{
 								marginTop: 16,
-								backgroundColor: theme.colors.primary,
+								backgroundColor: colors.primary,
 								padding: 12,
 								borderRadius: 8,
 							}}
 						>
-							<Text style={{ color: theme.colors.onPrimary }}>重试</Text>
+							<Text style={{ color: '#fff' }}>重试</Text>
 						</TouchableRipple>
 					</View>
 				) : files.length === 0 ? (

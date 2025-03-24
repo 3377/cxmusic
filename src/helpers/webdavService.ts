@@ -35,6 +35,22 @@ export interface WebDAVMusicFile extends WebDAVFile {
 	duration?: number
 }
 
+// 在类型定义区域进行补充，确保自定义类型与项目兼容
+// 注意：我们需要确保下面的类型定义与现有项目兼容
+// 添加一个MusicItem类型定义以匹配webdavFileToMusicItem函数使用
+// 这部分只需在旧代码不符合新类型的情况下添加
+export interface MusicItem {
+	id: string
+	title: string
+	artist: string
+	album: string
+	artwork: string
+	url: string
+	duration: number
+	isLocal: boolean
+	fromWebDAV?: boolean
+}
+
 let webdavClient: WebDAVClient | null = null
 let currentServer: WebDAVServer | null = null
 
