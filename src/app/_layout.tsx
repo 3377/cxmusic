@@ -1,6 +1,6 @@
 import { playbackService } from '@/constants/playbackService'
 import { colors } from '@/constants/tokens'
-import { logInfo } from '@/helpers/logger'
+import { logError, logInfo } from '@/helpers/logger'
 import LyricManager from '@/helpers/lyricManager'
 import { setupWebDAV } from '@/helpers/webdavService'
 import { useLogTrackPlayerState } from '@/hooks/useLogTrackPlayerState'
@@ -19,63 +19,82 @@ SplashScreen.preventAutoHideAsync()
 
 TrackPlayer.registerPlaybackService(() => playbackService)
 setI18nConfig()
+
 const App = () => {
+	const [isInitialized, setIsInitialized] = useState(false)
+	const [initError, setInitError] = useState<Error | null>(null)
+
 	const handleTrackPlayerLoaded = useCallback(() => {
-		setTimeout(SplashScreen.hideAsync, 1500)
+		logInfo('TrackPlayer initialized successfully')
 	}, [])
 
 	useSetupTrackPlayer({
-		onLoad: handleTrackPlayerLoaded, //播放器初始化后调用这个回调函数。这里先传过去。
+		onLoad: handleTrackPlayerLoaded,
 	})
 
 	useLogTrackPlayerState()
-	// myTrackPlayer.setupTrackPlayer()
 
-	LyricManager.setup()
-	const [isI18nReady, setIsI18nReady] = useState(false)
+	useEffect(() => {
+		const initializeApp = async () => {
+			try {
+				// 初始化 i18n
+				await setI18nConfig()
+				logInfo('i18n initialized successfully')
+
+				// 初始化 LyricManager
+				await LyricManager.setup()
+				logInfo('LyricManager initialized successfully')
+
+				// 初始化 WebDAV (可选)
+				try {
+					await setupWebDAV()
+					logInfo('WebDAV initialized successfully')
+				} catch (error) {
+					logError('WebDAV initialization failed, but continuing app startup:', error)
+				}
+
+				// 初始化 TrackPlayer
+				await TrackPlayer.setupPlayer({
+					autoHandleInterruptions: true,
+				})
+				logInfo('TrackPlayer initialized successfully')
+
+				// 所有初始化完成
+				setIsInitialized(true)
+
+				// 延迟1.5秒后隐藏启动屏幕
+				setTimeout(async () => {
+					try {
+						await SplashScreen.hideAsync()
+						logInfo('SplashScreen hidden successfully')
+					} catch (error) {
+						logError('Error hiding splash screen:', error)
+					}
+				}, 1500)
+			} catch (error) {
+				logError('Error during app initialization:', error)
+				setInitError(error as Error)
+				// 即使出错也要隐藏启动屏幕，避免卡死
+				try {
+					await SplashScreen.hideAsync()
+				} catch (e) {
+					logError('Error hiding splash screen after init error:', e)
+				}
+			}
+		}
+
+		initializeApp()
+	}, [])
+
 	const { hasShareIntent } = useShareIntentContext()
 
 	useEffect(() => {
 		if (hasShareIntent) {
-			// we want to handle share intent event in a specific page
-			console.log('[expo-router-index111] redirect to ShareIntent screen')
-			console.log('[expo-router-index111] hasShareIntent', hasShareIntent)
-			// router.push('/(modals)/settingModal')
+			logInfo('Share intent detected')
 		}
 	}, [hasShareIntent])
 
-	useEffect(() => {
-		const initWebDAV = async () => {
-			try {
-				// 初始化WebDAV服务
-				await setupWebDAV()
-				logInfo('WebDAV服务初始化完成')
-			} catch (error) {
-				console.error('Failed to initialize WebDAV:', error)
-			}
-		}
-
-		initWebDAV()
-	}, [])
-
-	useEffect(() => {
-		const initI18n = async () => {
-			try {
-				// 确保 i18n 配置已加载
-				await setI18nConfig()
-				setIsI18nReady(true)
-			} catch (error) {
-				console.error('Failed to initialize i18n:', error)
-			}
-		}
-
-		initI18n()
-	}, [])
 	const toastConfig = {
-		/*
-	  Overwrite 'success' type,
-	  by modifying the existing `BaseToast` component
-	*/
 		success: (props) => (
 			<BaseToast
 				{...props}
@@ -93,10 +112,6 @@ const App = () => {
 				}}
 			/>
 		),
-		/*
-	  Overwrite 'error' type,
-	  by modifying the existing `ErrorToast` component
-	*/
 		error: (props) => (
 			<ErrorToast
 				{...props}
@@ -114,21 +129,19 @@ const App = () => {
 				}}
 			/>
 		),
-		/*
-	  Or create a completely new type - `tomatoToast`,
-	  building the layout from scratch.
-  
-	  I can consume any custom `props` I want.
-	  They will be passed when calling the `show` method (see below)
-	*/
 	}
+
+	// 如果初始化出错，仍然渲染应用但显示错误信息
+	if (initError) {
+		logError('App initialization failed:', initError)
+	}
+
 	return (
 		<ShareIntentProvider
 			options={{
 				debug: true,
 				resetOnBackground: true,
 				onResetShareIntent: () =>
-					// used when app going in background and when the reset button is pressed
 					router.replace({
 						pathname: '/',
 					}),
@@ -147,7 +160,6 @@ const App = () => {
 
 const RootNavigation = () => {
 	return (
-		//每个 Stack.Screen 组件定义了一个可导航的屏幕
 		<Stack>
 			<Stack.Screen name="(tabs)" options={{ headerShown: false }} />
 			<Stack.Screen
@@ -224,6 +236,15 @@ const RootNavigation = () => {
 					headerTitleStyle: {
 						color: colors.text,
 					},
+				}}
+			/>
+			<Stack.Screen
+				name="(modals)/webdavModal"
+				options={{
+					presentation: 'modal',
+					headerShown: false,
+					gestureEnabled: true,
+					gestureDirection: 'vertical',
 				}}
 			/>
 		</Stack>

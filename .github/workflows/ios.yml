@@ -19,13 +19,30 @@ jobs:
         node-version: '18'
         cache: 'yarn'
     
+    - name: Cache CocoaPods
+      uses: actions/cache@v3
+      with:
+        path: ios/Pods
+        key: ${{ runner.os }}-pods-${{ hashFiles('**/Podfile.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-pods-
+    
+    - name: Cache Xcode build
+      uses: actions/cache@v3
+      with:
+        path: ios/build
+        key: ${{ runner.os }}-xcode-build-${{ github.sha }}
+        restore-keys: |
+          ${{ runner.os }}-xcode-build-
+    
     - name: Install dependencies
-      run: yarn install
+      run: |
+        yarn install --frozen-lockfile --prefer-offline
     
     - name: Install iOS dependencies
       run: |
         cd ios
-        pod install
+        pod install --repo-update
         cd ..
     
     - name: Fix project paths
@@ -47,15 +64,20 @@ jobs:
         export LANG=en_US.UTF-8
         export LC_ALL=en_US.UTF-8
         
-        # 构建Release版本
+        # 构建Release版本（优化参数）
         xcodebuild -workspace CyMusic.xcworkspace -scheme CyMusic -configuration Release -sdk iphoneos -derivedDataPath build \
           CODE_SIGNING_ALLOWED=NO \
           CODE_SIGNING_REQUIRED=NO \
           CODE_SIGNING_IDENTITY="" \
           CODE_SIGN_STYLE=Manual \
-          IPHONEOS_DEPLOYMENT_TARGET=15.0
+          IPHONEOS_DEPLOYMENT_TARGET=15.0 \
+          ONLY_ACTIVE_ARCH=NO \
+          ARCHS=arm64 \
+          -parallelizeTargets \
+          -jobs 3 \
+          -quiet
         
-        # 创建IPA包
+        # 创建IPA包（优化打包过程）
         mkdir -p Payload
         cp -r build/Build/Products/Release-iphoneos/CyMusic.app Payload/
         if [ -d "build/Build/Products/Release-iphoneos/ShareExtension.appex" ]; then
