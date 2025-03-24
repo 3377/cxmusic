@@ -1,6 +1,5 @@
 import { colors } from '@/constants/tokens'
 import { logError } from '@/helpers/logger'
-import myTrackPlayer from '@/helpers/trackPlayerIndex'
 import {
 	WebDAVFile,
 	getAllMusicFiles,
@@ -22,6 +21,7 @@ import {
 	TouchableOpacity,
 	View,
 } from 'react-native'
+import TrackPlayer from 'react-native-track-player'
 
 // 文件项组件
 const FileItem = ({ file, onPress, onLongPress }) => {
@@ -170,10 +170,11 @@ const WebDAVScreen = () => {
 	}
 
 	// 播放音乐文件
-	const handlePlayFile = (file: WebDAVFile) => {
+	const handlePlayFile = async (file: WebDAVFile) => {
 		try {
 			const musicItem = webdavFileToMusicItem(file)
-			myTrackPlayer.play(musicItem)
+			await TrackPlayer.add(musicItem)
+			await TrackPlayer.play()
 			showToast(`正在播放: ${file.basename}`, 'success')
 		} catch (error) {
 			logError('播放文件失败:', error)
@@ -182,10 +183,10 @@ const WebDAVScreen = () => {
 	}
 
 	// 添加到播放队列
-	const handleAddToQueue = (file: WebDAVFile) => {
+	const handleAddToQueue = async (file: WebDAVFile) => {
 		try {
 			const musicItem = webdavFileToMusicItem(file)
-			myTrackPlayer.add(musicItem)
+			await TrackPlayer.add(musicItem)
 			showToast(`已添加到队列: ${file.basename}`, 'success')
 		} catch (error) {
 			logError('添加到队列失败:', error)
@@ -212,8 +213,8 @@ const WebDAVScreen = () => {
 
 			// 转换为音乐项并播放
 			const musicItems = webdavFilesToMusicItems(musicFiles)
-			await myTrackPlayer.addAll(musicItems)
-			await myTrackPlayer.play(musicItems[0])
+			await TrackPlayer.add(musicItems)
+			await TrackPlayer.play()
 
 			showToast(`正在播放目录中的 ${musicFiles.length} 首音乐`, 'success')
 		} catch (error) {
@@ -246,17 +247,6 @@ const WebDAVScreen = () => {
 
 	return (
 		<View style={styles.container}>
-			{/* 标题栏 */}
-			<View style={styles.header}>
-				<Text style={styles.headerTitle}>WebDAV音乐</Text>
-				<TouchableOpacity
-					style={styles.settingsButton}
-					onPress={() => router.push('/(modals)/webdavModal')}
-				>
-					<Ionicons name="settings-outline" size={24} color={colors.text} />
-				</TouchableOpacity>
-			</View>
-
 			{!currentServer ? (
 				// 未连接服务器的提示
 				<View style={styles.noServerContainer}>
@@ -338,22 +328,6 @@ const styles = StyleSheet.create({
 	container: {
 		flex: 1,
 		backgroundColor: colors.background,
-	},
-	header: {
-		flexDirection: 'row',
-		justifyContent: 'space-between',
-		alignItems: 'center',
-		paddingHorizontal: 20,
-		paddingTop: 60,
-		paddingBottom: 10,
-	},
-	headerTitle: {
-		fontSize: 28,
-		fontWeight: 'bold',
-		color: colors.text,
-	},
-	settingsButton: {
-		padding: 10,
 	},
 	noServerContainer: {
 		flex: 1,
