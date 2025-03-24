@@ -35,8 +35,15 @@ jobs:
         export LANG=en_US.UTF-8
         export LC_ALL=en_US.UTF-8
         
-        # 构建Release版本
-        xcodebuild -workspace CyMusic.xcworkspace -scheme CyMusic -configuration Release -sdk iphoneos -derivedDataPath build CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGNING_IDENTITY="" CODE_SIGN_STYLE=Manual
+        # 构建Release版本,跳过ShareExtension
+        xcodebuild -workspace CyMusic.xcworkspace -scheme CyMusic -configuration Release -sdk iphoneos -derivedDataPath build \
+          CODE_SIGNING_ALLOWED=NO \
+          CODE_SIGNING_REQUIRED=NO \
+          CODE_SIGNING_IDENTITY="" \
+          CODE_SIGN_STYLE=Manual \
+          IPHONEOS_DEPLOYMENT_TARGET=15.0 \
+          -skipBuild ShareExtension \
+          -buildSettings IPHONEOS_DEPLOYMENT_TARGET=15.0
         
         # 创建IPA包
         mkdir -p Payload
