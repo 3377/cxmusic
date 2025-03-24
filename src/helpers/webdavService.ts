@@ -1,7 +1,8 @@
-import { getStorage, setStorage } from '@/helpers/storage'
+import { getStorage } from '@/helpers/storage'
 import { GlobalState } from '@/utils/stateMapper'
+import AsyncStorage from '@react-native-async-storage/async-storage'
 import { useEffect, useState } from 'react'
-import { AuthType, createClient, WebDAVClient } from 'webdav'
+import { createClient, WebDAVClient, WebDAVClientOptions } from 'webdav'
 import { logError, logInfo } from './logger'
 
 // WebDAV服务器存储
@@ -12,8 +13,9 @@ export interface WebDAVServer {
 	id: string
 	name: string
 	url: string
-	username: string
-	password: string
+	username?: string
+	password?: string
+	client?: WebDAVClient
 	isDefault?: boolean
 }
 
@@ -51,275 +53,323 @@ export interface MusicItem {
 	fromWebDAV?: boolean
 }
 
+// 存储键名
+const WEBDAV_SERVERS_KEY = 'webdav_servers'
+const CURRENT_WEBDAV_SERVER_KEY = 'current_webdav_server'
+
+// 创建一个简单的状态订阅系统
+type Subscriber = () => void
+const subscribers: Subscriber[] = []
+
+/**
+ * 订阅WebDAV状态变更
+ * @param callback 状态变更时的回调函数
+ * @returns 取消订阅的函数
+ */
+export function subscribeToWebDAVStatus(callback: Subscriber): () => void {
+	subscribers.push(callback)
+	return () => {
+		const index = subscribers.indexOf(callback)
+		if (index !== -1) {
+			subscribers.splice(index, 1)
+		}
+	}
+}
+
+/**
+ * 通知所有订阅者状态已更新
+ */
+function notifySubscribers(): void {
+	subscribers.forEach((callback) => {
+		try {
+			callback()
+		} catch (error) {
+			logError('调用WebDAV状态订阅者回调失败:', error)
+		}
+	})
+}
+
+// 保存WebDAV服务器列表到存储
+async function saveWebDAVServers(): Promise<void> {
+	try {
+		await AsyncStorage.setItem(WEBDAV_SERVERS_KEY, JSON.stringify(servers))
+		logInfo('WebDAV服务器列表已保存')
+	} catch (error) {
+		logError('保存WebDAV服务器列表失败:', error)
+	}
+}
+
 let webdavClient: WebDAVClient | null = null
 let currentServer: WebDAVServer | null = null
+let servers: WebDAVServer[] = []
 
 /**
  * 初始化WebDAV服务
  */
-export async function setupWebDAV() {
+export async function setupWebDAV(): Promise<void> {
 	try {
-		// 确保webdavClient初始状态为null
+		logInfo('开始初始化WebDAV服务...')
+
+		// 重置状态
 		webdavClient = null
 		currentServer = null
 
 		// 从存储中加载服务器列表
-		const savedServers =
-			(await getStorage('webdav-servers').catch((err) => {
-				logError('加载WebDAV服务器列表失败:', err)
-				return []
-			})) || []
-
-		if (savedServers && Array.isArray(savedServers)) {
-			// 安全地设置服务器列表
-			try {
-				webdavServersStore.setValue(savedServers)
-			} catch (err) {
-				logError('设置WebDAV服务器列表失败:', err)
-				webdavServersStore.setValue([])
-			}
-
-			// 如果有默认服务器，则连接到它
-			try {
-				const defaultServer = savedServers.find((server) => server.isDefault)
-				if (defaultServer) {
-					// 防止此处连接失败影响整个初始化过程
-					try {
-						await connectToServer(defaultServer).catch((err) => {
-							logError('连接默认WebDAV服务器失败:', err)
-							// 连接失败时确保客户端状态正确
-							webdavClient = null
-							currentServer = null
-						})
-					} catch (connErr) {
-						logError('连接默认服务器时发生异常:', connErr)
-						// 确保客户端状态正确
-						webdavClient = null
-						currentServer = null
-					}
+		try {
+			const serversJson = await AsyncStorage.getItem(WEBDAV_SERVERS_KEY)
+			if (serversJson) {
+				const loadedServers = JSON.parse(serversJson)
+				if (Array.isArray(loadedServers)) {
+					servers = loadedServers
+					logInfo(`已加载${servers.length}个WebDAV服务器配置`)
+				} else {
+					logError('WebDAV服务器数据格式错误，重置为空列表')
+					servers = []
 				}
-			} catch (connErr) {
-				logError('查找或连接默认服务器失败:', connErr)
-				// 连接失败不终止初始化过程，但确保状态正确
-				webdavClient = null
-				currentServer = null
+			} else {
+				logInfo('无保存的WebDAV服务器配置')
+				servers = []
 			}
-		} else {
-			// 确保存储值是有效的数组
-			webdavServersStore.setValue([])
+		} catch (loadError) {
+			logError('加载WebDAV服务器列表失败:', loadError)
+			servers = []
 		}
+
+		// 加载当前服务器ID
+		try {
+			const currentId = await AsyncStorage.getItem(CURRENT_WEBDAV_SERVER_KEY)
+
+			// 如果有当前服务器ID，尝试找到并连接
+			if (currentId) {
+				const server = servers.find((s) => s.id === currentId)
+				if (server) {
+					logInfo(`尝试连接到上次使用的WebDAV服务器: ${server.name}`)
+
+					try {
+						// 尝试连接到服务器
+						await connectToServer(server)
+						logInfo(`成功连接到WebDAV服务器: ${server.name}`)
+					} catch (connectError) {
+						logError(`连接到默认WebDAV服务器失败: ${connectError.message}`)
+						// 连接失败，但不要抛出异常，允许用户稍后手动连接
+					}
+				} else {
+					logInfo(`未找到ID为${currentId}的WebDAV服务器配置`)
+				}
+			} else if (servers.length > 0) {
+				// 如果没有当前服务器但有服务器列表，尝试连接到第一个
+				logInfo('尝试连接到第一个可用的WebDAV服务器')
+
+				try {
+					await connectToServer(servers[0])
+					logInfo(`成功连接到第一个WebDAV服务器: ${servers[0].name}`)
+				} catch (connectError) {
+					logError(`连接到第一个WebDAV服务器失败: ${connectError.message}`)
+					// 连接失败，但不要抛出异常，允许用户稍后手动连接
+				}
+			} else {
+				logInfo('无可用的WebDAV服务器配置')
+			}
+		} catch (currentIdError) {
+			logError('加载当前WebDAV服务器ID失败:', currentIdError)
+		}
+
+		// 通知订阅者更新
+		notifySubscribers()
 
 		logInfo('WebDAV服务初始化完成')
 	} catch (error) {
 		logError('WebDAV服务初始化失败:', error)
-		// 初始化失败，设置为安全的默认值
-		try {
-			webdavServersStore.setValue([])
-		} catch (e) {
-			logError('重置WebDAV服务器列表失败:', e)
-		}
+		// 确保在发生错误时设置安全的默认状态
 		webdavClient = null
 		currentServer = null
+		servers = []
+		notifySubscribers()
 	}
 }
 
 /**
  * 连接到WebDAV服务器
- * @param server WebDAV服务器配置
+ * @param server 服务器配置
  */
-export async function connectToServer(server: WebDAVServer): Promise<boolean> {
-	// 首先重置客户端状态
-	webdavClient = null
-	currentServer = null
-
-	if (!server || !server.url) {
-		logError('无效的WebDAV服务器配置')
-		return false
-	}
-
+export async function connectToServer(server: WebDAVServer): Promise<void> {
 	try {
-		// 尝试创建WebDAV客户端
+		if (!server) {
+			throw new Error('服务器配置无效')
+		}
+
+		if (!server.url) {
+			throw new Error('服务器URL未设置')
+		}
+
+		logInfo(`正在连接到WebDAV服务器: ${server.name} (${server.url})`)
+
+		// 创建WebDAV客户端配置
+		const clientOptions: WebDAVClientOptions = {
+			username: server.username || '',
+			password: server.password || '',
+			maxBodyLength: 1024 * 1024 * 50, // 50MB
+			maxContentLength: 1024 * 1024 * 50, // 50MB
+		}
+
+		// 创建WebDAV客户端
+		const client = createClient(server.url, clientOptions)
+
+		if (!client) {
+			throw new Error('WebDAV客户端创建失败')
+		}
+
+		// 测试连接 - 尝试获取根目录内容
 		try {
-			webdavClient = createClient(server.url, {
-				authType: AuthType.Password,
-				username: server.username || '',
-				password: server.password || '',
-			})
-		} catch (error) {
-			logError(`创建WebDAV客户端失败: ${server.name}`, error)
-			webdavClient = null
-			return false
+			await client.getDirectoryContents('/')
+			logInfo('WebDAV服务器连接测试成功')
+		} catch (testError) {
+			logError('WebDAV服务器连接测试失败:', testError)
+			throw new Error(`服务器连接测试失败: ${testError.message}`)
 		}
 
-		if (!webdavClient) {
-			logError(`WebDAV客户端创建失败: ${server.name}`)
-			return false
+		// 设置当前服务器和客户端
+		webdavClient = client
+		currentServer = {
+			...server,
+			client,
 		}
 
-		// 测试连接，使用更安全的尝试方式
-		let isConnected = false
-		try {
-			// 设置超时，防止长时间卡死
-			const connectPromise = webdavClient.exists('/')
-			const timeoutPromise = new Promise((_, reject) =>
-				setTimeout(() => reject(new Error('连接超时')), 10000),
-			)
+		// 保存当前服务器ID
+		await AsyncStorage.setItem(CURRENT_WEBDAV_SERVER_KEY, server.id)
 
-			isConnected = (await Promise.race([connectPromise, timeoutPromise])) as boolean
-		} catch (error) {
-			logError(`WebDAV连接测试失败: ${server.name}`, error)
-			webdavClient = null
-			return false
-		}
+		// 通知订阅者更新
+		notifySubscribers()
 
-		if (isConnected) {
-			currentServer = { ...server } // 使用深拷贝防止引用问题
-			logInfo(`已连接到WebDAV服务器: ${server.name}`)
-			return true
-		} else {
-			webdavClient = null
-			logError(`无法连接到WebDAV服务器: ${server.name}`)
-			return false
-		}
+		logInfo(`已成功连接到WebDAV服务器: ${server.name}`)
 	} catch (error) {
-		webdavClient = null
-		currentServer = null
-		logError(`连接到WebDAV服务器失败: ${server.name}`, error)
-		return false
+		logError(`连接到WebDAV服务器失败 (${server?.name || '未知'}):`, error)
+		throw error // 重新抛出错误以便上层处理
 	}
 }
 
 /**
- * 添加WebDAV服务器
- * @param server WebDAV服务器配置
+ * 获取当前连接的WebDAV服务器
+ * @returns 当前连接的WebDAV服务器或null
  */
-export async function addWebDAVServer(server: WebDAVServer): Promise<boolean> {
+export function getCurrentWebDAVServer(): WebDAVServer | null {
+	return currentServer
+}
+
+/**
+ * 获取WebDAV服务器列表
+ * @returns WebDAV服务器列表
+ */
+export function getWebDAVServers(): WebDAVServer[] {
+	return [...servers] // 返回副本以防止外部修改
+}
+
+/**
+ * 添加WebDAV服务器
+ * @param server 服务器配置
+ */
+export async function addWebDAVServer(server: Omit<WebDAVServer, 'id'>): Promise<string> {
 	try {
-		const servers = webdavServersStore.getValue() || []
-
-		// 生成唯一ID
-		if (!server.id) {
-			server.id = Date.now().toString()
+		// 创建新服务器配置并添加唯一ID
+		const newServer: WebDAVServer = {
+			...server,
+			id: `webdav_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`,
 		}
 
-		// 如果是第一个添加的服务器，设为默认
-		if (servers.length === 0) {
-			server.isDefault = true
-		}
+		// 添加到服务器列表
+		servers.push(newServer)
 
-		// 如果设置为默认，取消其他服务器的默认状态
-		if (server.isDefault) {
-			servers.forEach((s) => {
-				if (s.id !== server.id) {
-					s.isDefault = false
-				}
-			})
-		}
+		// 保存更新
+		await saveWebDAVServers()
 
-		// 检查是否可以连接
-		const testClient = createClient(server.url, {
-			authType: AuthType.Password,
-			username: server.username,
-			password: server.password,
-		})
+		// 通知订阅者更新
+		notifySubscribers()
 
-		const isConnected = await testClient.exists('/')
-		if (!isConnected) {
-			return false
-		}
-
-		// 如果已存在相同ID的服务器，则更新它
-		const existingIndex = servers.findIndex((s) => s.id === server.id)
-		if (existingIndex >= 0) {
-			servers[existingIndex] = server
-		} else {
-			servers.push(server)
-		}
-
-		webdavServersStore.setValue([...servers])
-		await setStorage('webdav-servers', servers)
-
-		// 如果是默认服务器，连接到它
-		if (server.isDefault) {
-			await connectToServer(server)
-		}
-
-		return true
+		logInfo(`WebDAV服务器已添加: ${newServer.name}`)
+		return newServer.id
 	} catch (error) {
 		logError('添加WebDAV服务器失败:', error)
-		return false
+		throw error
+	}
+}
+
+/**
+ * 更新WebDAV服务器
+ * @param id 服务器ID
+ * @param updates 更新的服务器配置
+ */
+export async function updateWebDAVServer(
+	id: string,
+	updates: Partial<Omit<WebDAVServer, 'id'>>,
+): Promise<void> {
+	try {
+		// 查找服务器
+		const index = servers.findIndex((s) => s.id === id)
+		if (index === -1) {
+			throw new Error(`未找到ID为${id}的WebDAV服务器`)
+		}
+
+		// 更新服务器配置
+		servers[index] = {
+			...servers[index],
+			...updates,
+		}
+
+		// 保存更新
+		await saveWebDAVServers()
+
+		// 如果更新的是当前服务器，重新连接
+		if (currentServer?.id === id) {
+			try {
+				await connectToServer(servers[index])
+			} catch (connectError) {
+				logError(`重新连接到更新的WebDAV服务器失败: ${connectError.message}`)
+				// 连接失败但不抛出异常，让用户可以稍后手动尝试
+			}
+		}
+
+		// 通知订阅者更新
+		notifySubscribers()
+
+		logInfo(`WebDAV服务器已更新: ${servers[index].name}`)
+	} catch (error) {
+		logError('更新WebDAV服务器失败:', error)
+		throw error
 	}
 }
 
 /**
  * 删除WebDAV服务器
- * @param serverId 服务器ID
+ * @param id 服务器ID
  */
-export async function deleteWebDAVServer(serverId: string): Promise<boolean> {
+export async function deleteWebDAVServer(id: string): Promise<void> {
 	try {
-		const servers = webdavServersStore.getValue() || []
-		const serverIndex = servers.findIndex((s) => s.id === serverId)
-
-		if (serverIndex < 0) {
-			return false
+		// 查找服务器
+		const index = servers.findIndex((s) => s.id === id)
+		if (index === -1) {
+			throw new Error(`未找到ID为${id}的WebDAV服务器`)
 		}
 
-		const isDefault = servers[serverIndex].isDefault
-
-		// 删除服务器
-		servers.splice(serverIndex, 1)
-
-		// 如果删除的是默认服务器，设置新的默认服务器
-		if (isDefault && servers.length > 0) {
-			servers[0].isDefault = true
-			// 如果当前连接的是被删除的服务器，连接到新的默认服务器
-			if (currentServer?.id === serverId) {
-				await connectToServer(servers[0])
-			}
-		} else if (servers.length === 0) {
-			// 如果没有服务器了，清除当前客户端
+		// 如果删除的是当前服务器，断开连接
+		if (currentServer?.id === id) {
 			webdavClient = null
 			currentServer = null
+			await AsyncStorage.removeItem(CURRENT_WEBDAV_SERVER_KEY)
 		}
 
-		webdavServersStore.setValue([...servers])
-		await setStorage('webdav-servers', servers)
+		// 从列表中删除
+		servers.splice(index, 1)
 
-		return true
+		// 保存更新
+		await saveWebDAVServers()
+
+		// 通知订阅者更新
+		notifySubscribers()
+
+		logInfo(`WebDAV服务器已删除: ${id}`)
 	} catch (error) {
 		logError('删除WebDAV服务器失败:', error)
-		return false
-	}
-}
-
-/**
- * 设置默认WebDAV服务器
- * @param serverId 服务器ID
- */
-export async function setDefaultWebDAVServer(serverId: string): Promise<boolean> {
-	try {
-		const servers = webdavServersStore.getValue() || []
-		const serverToSetDefault = servers.find((s) => s.id === serverId)
-
-		if (!serverToSetDefault) {
-			return false
-		}
-
-		// 更新默认状态
-		servers.forEach((s) => {
-			s.isDefault = s.id === serverId
-		})
-
-		webdavServersStore.setValue([...servers])
-		await setStorage('webdav-servers', servers)
-
-		// 连接到新的默认服务器
-		await connectToServer(serverToSetDefault)
-
-		return true
-	} catch (error) {
-		logError('设置默认WebDAV服务器失败:', error)
-		return false
+		throw error
 	}
 }
 
@@ -369,185 +419,139 @@ export async function getDirectoryContents(
 }
 
 /**
- * 获取WebDAV文件URL
- * @param filePath 文件路径
+ * 获取WebDAV文件的URL
+ * @param file WebDAV文件对象
+ * @returns 文件的完整URL
  */
-export function getFileUrl(filePath: string): string {
-	if (!webdavClient || !currentServer) {
-		throw new Error('WebDAV客户端未连接')
-	}
-
+export function getFileUrl(file: any): string {
 	try {
-		// 确保filePath是有效的
-		if (!filePath) {
-			throw new Error('无效的文件路径')
+		if (!file || !file.filename) {
+			logError('getFileUrl: 无效的文件对象', file)
+			return ''
 		}
 
-		// 确保URL是有效的
+		const currentServer = getCurrentWebDAVServer()
+		if (!currentServer) {
+			logError('getFileUrl: 无WebDAV服务器配置')
+			return ''
+		}
+
+		if (!currentServer.url) {
+			logError('getFileUrl: WebDAV服务器URL未配置')
+			return ''
+		}
+
+		// 确保服务器URL以/结尾
 		let serverUrl = currentServer.url
 		if (!serverUrl.endsWith('/')) {
-			serverUrl += '/'
+			serverUrl = serverUrl + '/'
 		}
 
-		// 移除filePath开头的斜杠以避免重复
-		const cleanPath = filePath.startsWith('/') ? filePath.slice(1) : filePath
+		// 处理文件路径，确保它不以/开头
+		let filePath = file.filename
+		if (filePath.startsWith('/')) {
+			filePath = filePath.substring(1)
+		}
 
-		// 构建基本URL
-		let fullUrl = `${serverUrl}${cleanPath}`
+		// 构建完整URL
+		let fullUrl = serverUrl + filePath
 
-		// 如果URL包含认证信息，不要重复添加
-		if (!fullUrl.includes('@')) {
-			// 使用URL对象解析URL
+		// 添加身份验证信息（如果有）
+		if (currentServer.username && currentServer.password) {
 			try {
 				const url = new URL(fullUrl)
-
-				// 添加基本认证
-				if (currentServer.username && currentServer.password) {
-					try {
-						// 使用先编码用户名和密码以避免特殊字符问题
-						const encodedUsername = encodeURIComponent(currentServer.username || '')
-						const encodedPassword = encodeURIComponent(currentServer.password || '')
-						url.username = encodedUsername
-						url.password = encodedPassword
-						fullUrl = url.toString()
-					} catch (err) {
-						// 如果无法设置用户名和密码，回退到原始URL
-						logError('设置URL用户名密码失败:', err)
-					}
-				}
-			} catch (e) {
-				// URL解析失败，回退到简单的字符串拼接
-				logError('URL解析失败，使用简单拼接:', e)
-				if (currentServer.username && currentServer.password) {
-					try {
-						const urlParts = fullUrl.split('://')
-						if (urlParts.length === 2) {
-							const encodedUsername = encodeURIComponent(currentServer.username || '')
-							const encodedPassword = encodeURIComponent(currentServer.password || '')
-							fullUrl = `${urlParts[0]}://${encodedUsername}:${encodedPassword}@${urlParts[1]}`
-						}
-					} catch (err) {
-						// 如果拼接失败，回退到原始URL
-						logError('拼接URL失败:', err)
-					}
+				const encodedUsername = encodeURIComponent(currentServer.username)
+				const encodedPassword = encodeURIComponent(currentServer.password)
+				url.username = encodedUsername
+				url.password = encodedPassword
+				fullUrl = url.toString()
+			} catch (urlError) {
+				logError('getFileUrl: URL构建错误', urlError)
+				// 在URL解析失败的情况下，尝试手动构建带认证的URL
+				const urlParts = fullUrl.split('://')
+				if (urlParts.length === 2) {
+					const encodedUsername = encodeURIComponent(currentServer.username)
+					const encodedPassword = encodeURIComponent(currentServer.password)
+					fullUrl = `${urlParts[0]}://${encodedUsername}:${encodedPassword}@${urlParts[1]}`
 				}
 			}
 		}
 
+		logInfo('WebDAV文件URL:', fullUrl)
 		return fullUrl
 	} catch (error) {
-		logError('构建WebDAV文件URL失败:', error)
-		// 返回一个安全的默认值，而不是抛出异常
-		return `${currentServer.url || ''}/${filePath || ''}`
+		logError('getFileUrl: 生成文件URL时出错', error)
+		return ''
 	}
 }
 
 /**
- * 将WebDAV音乐文件转换为应用可用的音乐项
+ * 将WebDAV文件转换为音乐项目
  * @param file WebDAV文件
+ * @returns 音乐项目对象
  */
-export function webdavFileToMusicItem(file: WebDAVFile): IMusic.IMusicItem {
-	if (!currentServer) {
-		throw new Error('WebDAV客户端未连接')
-	}
-
+export function webdavFileToMusicItem(file: any): any {
 	try {
-		// 确保文件对象有效
-		if (!file || !file.path) {
-			throw new Error('无效的文件对象')
+		if (!file || !file.filename) {
+			logError('webdavFileToMusicItem: 无效的文件对象', file)
+			return null
 		}
 
-		// 提取音乐文件的文件名作为歌曲名
-		const title = file.basename ? file.basename.replace(/\.[^/.]+$/, '') : '未知歌曲' // 去除扩展名
-
-		// 获取文件URL（包含错误处理）
-		let fileUrl = ''
-		try {
-			fileUrl = getFileUrl(file.path)
-		} catch (e) {
-			logError('获取文件URL失败，使用原始路径:', e)
-			fileUrl = file.path
+		const currentServer = getCurrentWebDAVServer()
+		if (!currentServer) {
+			logError('webdavFileToMusicItem: 无WebDAV服务器配置')
+			return null
 		}
 
-		// 创建认证头信息
-		let authHeaders = {}
-		try {
-			if (currentServer.username && currentServer.password) {
-				// 确保用户名和密码非空
-				const username = currentServer.username || ''
-				const password = currentServer.password || ''
-				const authString = `${username}:${password}`
+		// 从文件名提取艺术家和标题
+		let artist = '未知艺术家'
+		let title = file.basename || '未知标题'
 
-				// 安全地创建base64字符串
-				try {
-					const base64Auth = Buffer.from(authString).toString('base64')
-					authHeaders = {
-						Authorization: `Basic ${base64Auth}`,
-					}
-				} catch (error) {
-					logError('创建base64认证字符串失败:', error)
-				}
+		// 尝试从文件名解析艺术家和标题（如 "艺术家 - 标题.mp3" 格式）
+		const nameWithoutExt = title.split('.').slice(0, -1).join('.')
+		const parts = nameWithoutExt.split(' - ')
+		if (parts.length >= 2) {
+			artist = parts[0].trim()
+			title = parts.slice(1).join(' - ').trim()
+		}
+
+		// 生成唯一ID
+		const id = `webdav-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`
+
+		// 获取文件URL
+		const url = getFileUrl(file)
+		if (!url) {
+			logError('webdavFileToMusicItem: 无法获取文件URL')
+			return null
+		}
+
+		// 创建认证头
+		let authHeader = null
+		if (currentServer.username && currentServer.password) {
+			try {
+				const auth = btoa(`${currentServer.username}:${currentServer.password}`)
+				authHeader = { Authorization: `Basic ${auth}` }
+			} catch (error) {
+				logError('webdavFileToMusicItem: 生成认证头失败', error)
 			}
-		} catch (e) {
-			logError('创建认证头失败:', e)
 		}
 
-		// 安全地创建ID
-		let id = ''
-		try {
-			id = `webdav-${currentServer.id}-${file.path}`
-		} catch (e) {
-			id = `webdav-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`
-			logError('创建音乐项ID失败，使用随机ID:', e)
-		}
-
-		// 创建音乐项
+		// 创建音乐项目对象
 		return {
-			id: id,
-			platform: 'webdav',
-			artist: currentServer.name || '未知艺术家', // 使用服务器名称作为艺术家名
-			title: title,
-			duration: 0, // 由于WebDAV不提供音频时长，设为0
-			album: '未知专辑',
-			artwork: '', // 默认无封面
-			url: fileUrl,
-			source: {
-				'128k': {
-					url: fileUrl,
-					headers: authHeaders,
-					size: file.size || 0,
-				},
-			},
-			// 保存原始文件信息，以便后续处理
-			webdav: {
-				serverId: currentServer.id || '',
-				serverName: currentServer.name || '',
-				path: file.path || '',
-				size: file.size || 0,
-				mime: file.mime || '',
-			},
+			id,
+			url,
+			title,
+			artist,
+			album: currentServer.name || '未知专辑',
+			artwork: '', // WebDAV没有内置的专辑封面
+			duration: 0, // WebDAV无法直接获取时长
+			headers: authHeader,
+			source: 'webdav',
+			serverName: currentServer.name,
 		}
 	} catch (error) {
-		logError('创建WebDAV音乐项失败:', error)
-
-		// 即使出错，也返回一个最小可用的音乐项
-		return {
-			id: `webdav-error-${Date.now()}`,
-			platform: 'webdav',
-			artist: '加载失败',
-			title: file?.basename || '无法加载文件',
-			duration: 0,
-			album: '未知专辑',
-			artwork: '',
-			url: '',
-			source: {
-				'128k': {
-					url: '',
-					headers: {},
-					size: 0,
-				},
-			},
-		}
+		logError('webdavFileToMusicItem: 转换文件时出错', error)
+		return null
 	}
 }
 
@@ -580,7 +584,7 @@ export async function getAllMusicFiles(
 		musicFiles.push(
 			...audioFiles.map((file) => ({
 				...file,
-				url: getFileUrl(file.path),
+				url: getFileUrl(file),
 			})),
 		)
 
@@ -617,63 +621,19 @@ export function useWebDAVServers() {
 }
 
 /**
- * 获取当前连接的WebDAV服务器
- */
-export function getCurrentWebDAVServer() {
-	return currentServer
-}
-
-/**
- * 钩子函数：获取当前连接的WebDAV服务器
+ * 使用React Hook获取当前WebDAV服务器
  */
 export function useCurrentWebDAVServer() {
-	const [server, setServer] = useState<WebDAVServer | null>(null)
+	const [server, setServer] = useState<WebDAVServer | null>(currentServer)
 
 	useEffect(() => {
-		let isMounted = true
+		// 订阅WebDAV状态更新
+		const unsubscribe = subscribeToWebDAVStatus(() => {
+			setServer(currentServer)
+		})
 
-		// 安全地获取当前服务器状态
-		try {
-			if (isMounted) {
-				setServer(currentServer ? { ...currentServer } : null)
-			}
-		} catch (error) {
-			logError('获取当前WebDAV服务器状态失败:', error)
-			if (isMounted) {
-				setServer(null)
-			}
-		}
-
-		// 创建更新函数
-		const updateServer = () => {
-			try {
-				if (isMounted) {
-					setServer(currentServer ? { ...currentServer } : null)
-				}
-			} catch (error) {
-				logError('更新WebDAV服务器状态失败:', error)
-				if (isMounted) {
-					setServer(null)
-				}
-			}
-		}
-
-		// 添加监听
-		try {
-			webdavServersStore.subscribe(updateServer)
-		} catch (error) {
-			logError('订阅WebDAV服务器状态更新失败:', error)
-		}
-
-		// 清理函数
-		return () => {
-			isMounted = false
-			try {
-				webdavServersStore.unsubscribe(updateServer)
-			} catch (error) {
-				logError('取消订阅WebDAV服务器状态更新失败:', error)
-			}
-		}
+		// 组件卸载时取消订阅
+		return unsubscribe
 	}, [])
 
 	return server
@@ -783,103 +743,5 @@ export const setupWebDAV = async (): Promise<void> => {
 			currentServer: null,
 			client: null,
 		})
-	}
-}
-
-// 增强获取文件URL的函数
-export const getFileUrl = (file: WebDAVFile): string => {
-	try {
-		if (!file || !file.filename) {
-			throw new Error('文件信息无效')
-		}
-
-		const currentServer = getCurrentWebDAVServer()
-		if (!currentServer) {
-			throw new Error('未连接WebDAV服务器')
-		}
-
-		// 组合URL时确保路径正确
-		let baseUrl = currentServer.url || ''
-		if (!baseUrl.endsWith('/')) {
-			baseUrl += '/'
-		}
-
-		// 规范化文件路径
-		let filePath = file.filename
-		while (filePath.startsWith('/')) {
-			filePath = filePath.substring(1)
-		}
-
-		// 构建完整URL
-		const fileUrl = `${baseUrl}${filePath}`
-
-		// 如果需要授权头信息
-		if (currentServer.username && currentServer.password) {
-			const authHeader = `Basic ${btoa(`${currentServer.username}:${currentServer.password}`)}`
-			return fileUrl + `?auth=${encodeURIComponent(authHeader)}`
-		}
-
-		return fileUrl
-	} catch (error) {
-		logError('构建WebDAV文件URL失败:', error)
-		// 返回安全的替代URL
-		return 'error://invalid-file-url'
-	}
-}
-
-// 增强播放项目创建函数
-export const webdavFileToMusicItem = (file: WebDAVFile): MusicItem => {
-	try {
-		if (!file) {
-			throw new Error('文件对象为空')
-		}
-
-		const currentServer = getCurrentWebDAVServer()
-		if (!currentServer) {
-			throw new Error('未连接WebDAV服务器')
-		}
-
-		// 安全地创建ID
-		const id = `webdav-${currentServer.name}-${file.filename}`.replace(/[^a-zA-Z0-9-]/g, '-')
-
-		// 从文件名中获取标题
-		let title = file.basename || '未知文件'
-
-		// 如果有扩展名，移除扩展名以获取歌曲标题
-		const lastDotIndex = title.lastIndexOf('.')
-		if (lastDotIndex > 0) {
-			title = title.substring(0, lastDotIndex)
-		}
-
-		// 构建基本的音乐项目
-		const musicItem: MusicItem = {
-			id,
-			title,
-			artist: '未知艺术家',
-			album: '未知专辑',
-			artwork: '', // 没有专辑封面
-			url: getFileUrl(file),
-			duration: 0, // 未知时长
-			isLocal: false,
-			fromWebDAV: true,
-		}
-
-		// 如果文件有额外的音乐元数据，可以在这里添加
-
-		return musicItem
-	} catch (error) {
-		logError('创建WebDAV音乐项目失败:', error)
-		// 返回最小化的音乐项目以避免崩溃
-		return {
-			id: `error-item-${Date.now()}`,
-			title: file?.basename || '错误的文件',
-			artist: '未知',
-			album: '未知',
-			artwork: '',
-			url: 'about:blank',
-			duration: 0,
-			isLocal: false,
-			fromWebDAV: true,
-		}
 	}
 }

@@ -1,55 +1,71 @@
 import { colors } from '@/constants/tokens'
-import { logError, logInfo } from '@/helpers/logger'
-import { getCurrentWebDAVServer } from '@/helpers/webdavService'
+import { logError } from '@/helpers/logger'
 import { Feather } from '@expo/vector-icons'
-import { Redirect, Stack, useRouter } from 'expo-router'
-import React, { useCallback, useEffect, useState } from 'react'
+import { Stack, useRouter } from 'expo-router'
+import React, { useEffect, useState } from 'react'
 import { ActivityIndicator, Text, TouchableOpacity, View } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 
 // 错误边界组件
 class ErrorBoundary extends React.Component {
-	state = { hasError: false, errorCount: 0 }
+	state = { hasError: false, error: null }
 
-	static getDerivedStateFromError() {
-		return { hasError: true }
+	static getDerivedStateFromError(error) {
+		return { hasError: true, error }
 	}
 
-	componentDidCatch(error, info) {
-		logError('WebDAV页面错误:', error, info)
-		this.setState((prevState) => ({
-			errorCount: prevState.errorCount + 1,
-		}))
+	componentDidCatch(error, errorInfo) {
+		logError('WebDAV布局渲染错误:', error, errorInfo)
 	}
 
 	retry = () => {
-		this.setState({ hasError: false })
+		this.setState({ hasError: false, error: null })
 	}
 
 	render() {
-		if (this.state.hasError) {
-			// 错误次数过多，返回到歌曲列表页面
-			if (this.state.errorCount > 3) {
-				return <Redirect href="/(tabs)/(songs)" />
-			}
+		const insets = useSafeAreaInsets ? useSafeAreaInsets() : { top: 0 }
 
+		if (this.state.hasError) {
 			return (
-				<View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', padding: 20 }}>
-					<Text style={{ fontSize: 18, fontWeight: 'bold', marginBottom: 15 }}>
-						抱歉，WebDAV页面加载失败
+				<View
+					style={{
+						flex: 1,
+						justifyContent: 'center',
+						alignItems: 'center',
+						backgroundColor: colors.background,
+						paddingTop: insets.top,
+					}}
+				>
+					<Feather name="alert-triangle" size={48} color="red" />
+					<Text
+						style={{
+							marginTop: 16,
+							color: colors.text,
+							fontSize: 16,
+							textAlign: 'center',
+						}}
+					>
+						WebDAV页面加载失败
 					</Text>
-					<Text style={{ fontSize: 14, marginBottom: 20, textAlign: 'center' }}>
-						这可能是由于网络连接问题或WebDAV服务器配置不正确导致的
+					<Text
+						style={{
+							marginTop: 8,
+							color: colors.textMuted,
+							textAlign: 'center',
+						}}
+					>
+						{this.state.error?.message || '未知错误'}
 					</Text>
 					<TouchableOpacity
 						onPress={this.retry}
 						style={{
-							padding: 12,
+							marginTop: 16,
 							backgroundColor: colors.primary,
+							padding: 12,
 							borderRadius: 8,
 						}}
 					>
-						<Text style={{ color: '#fff', fontWeight: 'bold' }}>重试</Text>
+						<Text style={{ color: '#fff' }}>重试</Text>
 					</TouchableOpacity>
 				</View>
 			)
@@ -59,132 +75,86 @@ class ErrorBoundary extends React.Component {
 	}
 }
 
+// 安全的头部按钮组件
+function SafeHeaderButton({ onPress }) {
+	try {
+		return (
+			<TouchableOpacity onPress={onPress} style={{ padding: 8 }}>
+				<Feather name="settings" size={24} color={colors.primary} />
+			</TouchableOpacity>
+		)
+	} catch (error) {
+		logError('WebDAV设置按钮渲染错误:', error)
+		return null
+	}
+}
+
+// 加载状态组件
+function LoadingView() {
+	const insets = useSafeAreaInsets ? useSafeAreaInsets() : { top: 0 }
+
+	return (
+		<View
+			style={{
+				flex: 1,
+				justifyContent: 'center',
+				alignItems: 'center',
+				backgroundColor: colors.background,
+				paddingTop: insets.top,
+			}}
+		>
+			<ActivityIndicator size="large" color={colors.primary} />
+			<Text style={{ marginTop: 16, color: colors.text }}>正在加载WebDAV...</Text>
+		</View>
+	)
+}
+
 export default function WebDavLayout() {
 	const router = useRouter()
 	const [isLoading, setIsLoading] = useState(true)
-	const [hasError, setHasError] = useState(false)
-	const insets = useSafeAreaInsets()
 
-	const onSettingsPress = useCallback(() => {
+	// 处理设置按钮点击
+	const handleSettingsPress = () => {
 		try {
-			logInfo('打开WebDAV设置')
 			router.push('/webdavModal')
 		} catch (error) {
-			logError('导航到WebDAV设置失败:', error)
+			logError('WebDAV设置导航错误:', error)
 		}
-	}, [router])
+	}
 
-	// 检查WebDAV服务是否准备就绪
-	const checkWebDAVServiceReady = useCallback(() => {
-		try {
-			setIsLoading(true)
-			const currentServer = getCurrentWebDAVServer()
-			if (!currentServer) {
-				logError('WebDAV服务未配置或未初始化')
-				setHasError(true)
-			} else {
-				logInfo('WebDAV服务就绪:', currentServer.name)
-				setHasError(false)
-			}
-		} catch (error) {
-			logError('检查WebDAV服务状态失败:', error)
-			setHasError(true)
-		} finally {
-			setIsLoading(false)
-		}
-	}, [])
-
-	// 组件挂载后检查WebDAV状态
+	// 模拟加载时间
 	useEffect(() => {
-		checkWebDAVServiceReady()
-	}, [checkWebDAVServiceReady])
-
-	// 通过检查当前WebDAV服务的状态来确定是否可以显示内容
-	if (isLoading) {
-		return (
-			<View
-				style={{
-					flex: 1,
-					justifyContent: 'center',
-					alignItems: 'center',
-					backgroundColor: colors.background,
-					paddingTop: insets.top,
-				}}
-			>
-				<ActivityIndicator size="large" color={colors.primary} />
-				<Text style={{ color: colors.text, marginTop: 16 }}>正在加载WebDAV服务...</Text>
-			</View>
-		)
-	}
-
-	if (hasError) {
-		return (
-			<View
-				style={{
-					flex: 1,
-					justifyContent: 'center',
-					alignItems: 'center',
-					backgroundColor: colors.background,
-					paddingTop: insets.top,
-				}}
-			>
-				<Feather name="alert-circle" size={48} color="red" />
-				<Text style={{ color: colors.text, marginTop: 16 }}>WebDAV服务未配置或初始化失败</Text>
-				<TouchableOpacity
-					onPress={checkWebDAVServiceReady}
-					style={{
-						padding: 12,
-						backgroundColor: colors.primary,
-						borderRadius: 8,
-						marginTop: 16,
-					}}
-				>
-					<Text style={{ color: 'white' }}>重试</Text>
-				</TouchableOpacity>
-				<TouchableOpacity
-					onPress={onSettingsPress}
-					style={{
-						padding: 12,
-						backgroundColor: colors.primary,
-						borderRadius: 8,
-						marginTop: 8,
-					}}
-				>
-					<Text style={{ color: 'white' }}>配置WebDAV</Text>
-				</TouchableOpacity>
-			</View>
-		)
-	}
+		const timer = setTimeout(() => {
+			setIsLoading(false)
+		}, 500)
+		return () => clearTimeout(timer)
+	}, [])
 
 	return (
 		<ErrorBoundary>
-			<Stack
-				screenOptions={{
-					headerRight: () => {
-						try {
-							return (
-								<TouchableOpacity
-									onPress={onSettingsPress}
-									style={{ padding: 8, marginRight: 8, borderRadius: 20 }}
-								>
-									<Feather name="settings" size={24} color={colors.text} />
-								</TouchableOpacity>
-							)
-						} catch (error) {
-							logError('渲染WebDAV设置按钮失败:', error)
-							return null
-						}
-					},
-				}}
-			>
-				<Stack.Screen
-					name="index"
-					options={{
-						title: 'WebDAV',
-						animation: 'fade',
+			{isLoading ? (
+				<LoadingView />
+			) : (
+				<Stack
+					screenOptions={{
+						headerStyle: {
+							backgroundColor: colors.background,
+						},
+						headerTintColor: colors.text,
+						headerTitleStyle: {
+							fontWeight: 'bold',
+						},
+						headerRight: () => <SafeHeaderButton onPress={handleSettingsPress} />,
 					}}
-				/>
-			</Stack>
+				>
+					<Stack.Screen
+						name="index"
+						options={{
+							title: 'WebDAV文件',
+						}}
+					/>
+				</Stack>
+			)}
 		</ErrorBoundary>
 	)
 }

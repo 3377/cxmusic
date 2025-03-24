@@ -1,13 +1,12 @@
 import { colors } from '@/constants/tokens'
 import { logError, logInfo } from '@/helpers/logger'
-import { getCurrentWebDAVServer, webdavFileToMusicItem } from '@/helpers/webdavService'
-import { usePlayer } from '@/hooks/usePlayer'
+import { useCurrentWebDAVServer, webdavFileToMusicItem } from '@/helpers/webdavService'
 import { formatBytes } from '@/utils/formatter'
 import { Feather } from '@expo/vector-icons'
 import { useRouter } from 'expo-router'
 import React, { useCallback, useEffect, useState } from 'react'
-import { ActivityIndicator, FlatList, Text, TouchableOpacity, View } from 'react-native'
-import { WebDAVClient } from 'webdav'
+import { ActivityIndicator, Alert, FlatList, Text, TouchableOpacity, View } from 'react-native'
+import TrackPlayer from 'react-native-track-player'
 
 // 处理日期格式化，安全返回格式化后的日期或占位符
 const formatDate = (dateString: string) => {
@@ -84,6 +83,32 @@ function EmptyContent({ onRefresh }) {
 	)
 }
 
+// 未配置WebDAV组件
+function NoWebDAVSetup({ onOpenSettings }) {
+	return (
+		<View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', padding: 20 }}>
+			<Feather name="server" size={48} color={colors.textMuted} />
+			<Text style={{ marginTop: 16, color: colors.text, fontSize: 16, textAlign: 'center' }}>
+				未配置WebDAV服务器
+			</Text>
+			<Text style={{ marginTop: 8, color: colors.textMuted, textAlign: 'center' }}>
+				请添加WebDAV服务器以访问您的文件
+			</Text>
+			<TouchableOpacity
+				onPress={onOpenSettings}
+				style={{
+					marginTop: 16,
+					backgroundColor: colors.primary,
+					padding: 12,
+					borderRadius: 8,
+				}}
+			>
+				<Text style={{ color: '#fff' }}>配置WebDAV</Text>
+			</TouchableOpacity>
+		</View>
+	)
+}
+
 // 错误捕获组件
 class ErrorCatcher extends React.Component {
 	state = { hasError: false, error: null }
@@ -133,54 +158,122 @@ class ErrorCatcher extends React.Component {
 	}
 }
 
+// 播放WebDAV音乐的简化函数
+const playWebDavTrack = async (musicItem) => {
+	try {
+		if (!musicItem) {
+			throw new Error('无效的音乐项')
+		}
+
+		// 直接使用Track Player API播放音乐
+		await TrackPlayer.reset()
+		await TrackPlayer.add({
+			id: musicItem.id || `webdav-${Date.now()}`,
+			url: musicItem.url,
+			title: musicItem.title || '未知标题',
+			artist: musicItem.artist || '未知艺术家',
+			artwork: musicItem.artwork || '',
+		})
+		await TrackPlayer.play()
+
+		logInfo('正在播放WebDAV音乐:', musicItem.title)
+	} catch (error) {
+		logError('播放WebDAV音乐失败:', error)
+		Alert.alert('错误', '无法播放此音乐文件')
+	}
+}
+
+// 将WebDAV文件添加到播放列表的简化函数
+const addToPlaylist = async (musicItem) => {
+	try {
+		if (!musicItem) {
+			throw new Error('无效的音乐项')
+		}
+
+		// 将音乐添加到播放队列
+		await TrackPlayer.add({
+			id: musicItem.id || `webdav-${Date.now()}`,
+			url: musicItem.url,
+			title: musicItem.title || '未知标题',
+			artist: musicItem.artist || '未知艺术家',
+			artwork: musicItem.artwork || '',
+		})
+
+		logInfo('已添加到播放列表:', musicItem.title)
+		Alert.alert('提示', '已添加到播放列表')
+	} catch (error) {
+		logError('添加到播放列表失败:', error)
+		Alert.alert('错误', '无法添加到播放列表')
+	}
+}
+
 export default function WebDavScreen() {
 	const router = useRouter()
-	const player = usePlayer()
+	const currentServer = useCurrentWebDAVServer()
 
 	const [currentPath, setCurrentPath] = useState('/')
 	const [files, setFiles] = useState([])
 	const [isLoading, setIsLoading] = useState(true)
 	const [error, setError] = useState(null)
-	const [client, setClient] = useState<WebDAVClient | null>(null)
 	const [refreshKey, setRefreshKey] = useState(0) // 用于强制刷新
 
-	// 加载当前目录的文件
-	const loadFiles = useCallback(async (path = '/') => {
+	// 打开WebDAV设置
+	const openWebDAVSettings = useCallback(() => {
 		try {
-			setIsLoading(true)
-			setError(null)
-
-			const currentServer = getCurrentWebDAVServer()
-			if (!currentServer || !currentServer.client) {
-				throw new Error('WebDAV客户端未初始化')
-			}
-
-			setClient(currentServer.client)
-			logInfo('正在加载WebDAV文件列表，路径:', path)
-
-			const contents = await currentServer.client.getDirectoryContents(path)
-			if (Array.isArray(contents)) {
-				// 对文件进行排序：文件夹在前，文件在后，同类型按名称排序
-				const sortedContents = [...contents].sort((a, b) => {
-					if (a.type === 'directory' && b.type !== 'directory') return -1
-					if (a.type !== 'directory' && b.type === 'directory') return 1
-					return a.basename.localeCompare(b.basename)
-				})
-
-				setFiles(sortedContents)
-				logInfo(`WebDAV文件加载完成，找到 ${sortedContents.length} 个项目`)
-			} else {
-				setFiles([])
-				logInfo('WebDAV路径为空或返回了意外格式')
-			}
-		} catch (err) {
-			logError('加载WebDAV文件失败:', err)
-			setError(err.message || '加载文件失败')
-			setFiles([])
-		} finally {
-			setIsLoading(false)
+			logInfo('打开WebDAV设置')
+			router.push('/webdavModal')
+		} catch (error) {
+			logError('导航到WebDAV设置失败:', error)
+			Alert.alert('错误', '无法打开WebDAV设置')
 		}
-	}, [])
+	}, [router])
+
+	// 加载当前目录的文件
+	const loadFiles = useCallback(
+		async (path = '/') => {
+			try {
+				setIsLoading(true)
+				setError(null)
+
+				// 检查是否有WebDAV服务器配置
+				if (!currentServer) {
+					setIsLoading(false)
+					return
+				}
+
+				logInfo('正在加载WebDAV文件列表，路径:', path)
+
+				// 获取当前服务器的客户端
+				const client = currentServer.client
+				if (!client) {
+					throw new Error('WebDAV客户端未初始化')
+				}
+
+				const contents = await client.getDirectoryContents(path)
+				if (Array.isArray(contents)) {
+					// 对文件进行排序：文件夹在前，文件在后，同类型按名称排序
+					const sortedContents = [...contents].sort((a, b) => {
+						if (a.type === 'directory' && b.type !== 'directory') return -1
+						if (a.type !== 'directory' && b.type === 'directory') return 1
+						return a.basename.localeCompare(b.basename)
+					})
+
+					setFiles(sortedContents)
+					logInfo(`WebDAV文件加载完成，找到 ${sortedContents.length} 个项目`)
+				} else {
+					setFiles([])
+					logInfo('WebDAV路径为空或返回了意外格式')
+				}
+			} catch (err) {
+				logError('加载WebDAV文件失败:', err)
+				setError(err.message || '加载文件失败')
+				setFiles([])
+			} finally {
+				setIsLoading(false)
+			}
+		},
+		[currentServer],
+	)
 
 	// 刷新当前目录
 	const refreshFiles = useCallback(() => {
@@ -207,12 +300,13 @@ export default function WebDavScreen() {
 						// 转换为音乐项目并播放
 						const musicItem = webdavFileToMusicItem(file)
 						if (musicItem) {
-							player.playMusic(musicItem)
+							// 使用我们自定义的简化播放函数
+							playWebDavTrack(musicItem)
 						}
 					} else {
 						logInfo('不支持播放的文件类型:', extension)
 						// 显示提示
-						alert(`暂不支持播放 ${extension} 类型的文件`)
+						Alert.alert('提示', `暂不支持播放 ${extension} 类型的文件`)
 					}
 				}
 			} catch (err) {
@@ -220,8 +314,34 @@ export default function WebDavScreen() {
 				setError(err.message || '处理文件操作失败')
 			}
 		},
-		[currentPath, loadFiles, player],
+		[currentPath, loadFiles],
 	)
+
+	// 处理文件长按 - 添加到播放列表
+	const handleFileLongPress = useCallback((file) => {
+		try {
+			if (file.type === 'file') {
+				// 检查是否是音乐文件
+				const extension = file.basename.split('.').pop()?.toLowerCase()
+				const musicExtensions = ['mp3', 'wav', 'flac', 'aac', 'm4a', 'ogg']
+
+				if (musicExtensions.includes(extension)) {
+					logInfo('添加WebDAV音乐文件到播放列表:', file.basename)
+					// 转换为音乐项目并添加到播放列表
+					const musicItem = webdavFileToMusicItem(file)
+					if (musicItem) {
+						// 使用自定义的添加到播放列表函数
+						addToPlaylist(musicItem)
+					}
+				} else {
+					Alert.alert('提示', `不支持添加 ${extension} 类型的文件到播放列表`)
+				}
+			}
+		} catch (err) {
+			logError('处理文件长按失败:', err)
+			Alert.alert('错误', '无法添加文件到播放列表')
+		}
+	}, [])
 
 	// 处理返回上一级目录
 	const handleGoBack = useCallback(() => {
@@ -246,68 +366,78 @@ export default function WebDavScreen() {
 	// 初始加载
 	useEffect(() => {
 		loadFiles('/')
-	}, [loadFiles])
+	}, [loadFiles, currentServer])
 
 	// 渲染页面
 	return (
 		<ErrorCatcher onRetry={refreshFiles}>
 			<View style={{ flex: 1, backgroundColor: colors.background }}>
-				{/* 路径显示和导航 */}
-				<View
-					style={{
-						flexDirection: 'row',
-						alignItems: 'center',
-						padding: 16,
-						borderBottomWidth: 1,
-						borderBottomColor: '#333',
-					}}
-				>
-					{currentPath !== '/' && (
-						<TouchableOpacity onPress={handleGoBack} style={{ marginRight: 8 }}>
-							<Feather name="arrow-left" size={20} color={colors.primary} />
-						</TouchableOpacity>
-					)}
-					<Text style={{ flex: 1, color: colors.text }}>
-						{currentPath === '/' ? '根目录' : currentPath}
-					</Text>
-					<TouchableOpacity onPress={refreshFiles}>
-						<Feather name="refresh-cw" size={20} color={colors.primary} />
-					</TouchableOpacity>
-				</View>
-
-				{/* 文件列表 */}
-				{isLoading ? (
-					<LoadingPlaceholder />
-				) : error ? (
-					<View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', padding: 20 }}>
-						<Feather name="alert-circle" size={48} color="red" />
-						<Text style={{ marginTop: 16, color: colors.text, textAlign: 'center' }}>{error}</Text>
-						<TouchableOpacity
-							onPress={refreshFiles}
+				{!currentServer ? (
+					<NoWebDAVSetup onOpenSettings={openWebDAVSettings} />
+				) : (
+					<>
+						{/* 路径显示和导航 */}
+						<View
 							style={{
-								marginTop: 16,
-								backgroundColor: colors.primary,
-								padding: 12,
-								borderRadius: 8,
+								flexDirection: 'row',
+								alignItems: 'center',
+								padding: 16,
+								borderBottomWidth: 1,
+								borderBottomColor: '#333',
 							}}
 						>
-							<Text style={{ color: '#fff' }}>重试</Text>
-						</TouchableOpacity>
-					</View>
-				) : files.length === 0 ? (
-					<EmptyContent onRefresh={refreshFiles} />
-				) : (
-					<FlatList
-						data={files}
-						keyExtractor={(item) => item.filename + '-' + refreshKey}
-						renderItem={({ item }) => (
-							<FileItem
-								file={item}
-								onPress={handleFilePress}
-								onLongPress={() => {}} // 长按功能可以添加更多操作
+							{currentPath !== '/' && (
+								<TouchableOpacity onPress={handleGoBack} style={{ marginRight: 8 }}>
+									<Feather name="arrow-left" size={20} color={colors.primary} />
+								</TouchableOpacity>
+							)}
+							<Text style={{ flex: 1, color: colors.text }}>
+								{currentPath === '/' ? '根目录' : currentPath}
+							</Text>
+							<TouchableOpacity onPress={refreshFiles}>
+								<Feather name="refresh-cw" size={20} color={colors.primary} />
+							</TouchableOpacity>
+						</View>
+
+						{/* 文件列表 */}
+						{isLoading ? (
+							<LoadingPlaceholder />
+						) : error ? (
+							<View
+								style={{ flex: 1, justifyContent: 'center', alignItems: 'center', padding: 20 }}
+							>
+								<Feather name="alert-circle" size={48} color="red" />
+								<Text style={{ marginTop: 16, color: colors.text, textAlign: 'center' }}>
+									{error}
+								</Text>
+								<TouchableOpacity
+									onPress={refreshFiles}
+									style={{
+										marginTop: 16,
+										backgroundColor: colors.primary,
+										padding: 12,
+										borderRadius: 8,
+									}}
+								>
+									<Text style={{ color: '#fff' }}>重试</Text>
+								</TouchableOpacity>
+							</View>
+						) : files.length === 0 ? (
+							<EmptyContent onRefresh={refreshFiles} />
+						) : (
+							<FlatList
+								data={files}
+								keyExtractor={(item) => item.filename + '-' + refreshKey}
+								renderItem={({ item }) => (
+									<FileItem
+										file={item}
+										onPress={handleFilePress}
+										onLongPress={handleFileLongPress}
+									/>
+								)}
 							/>
 						)}
-					/>
+					</>
 				)}
 			</View>
 		</ErrorCatcher>
