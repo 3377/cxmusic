@@ -53,11 +53,9 @@ const App = () => {
 					logError('WebDAV initialization failed, but continuing app startup:', error)
 				}
 
-				// 初始化 TrackPlayer
-				await TrackPlayer.setupPlayer({
-					autoHandleInterruptions: true,
-				})
-				logInfo('TrackPlayer initialized successfully')
+				// TrackPlayer已经在useSetupTrackPlayer中初始化
+				// 不要在这里重复初始化
+				logInfo('Waiting for TrackPlayer initialization...')
 
 				// 所有初始化完成
 				setIsInitialized(true)

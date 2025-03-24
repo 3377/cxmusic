@@ -1,5 +1,6 @@
 import { colors } from '@/constants/tokens'
 import { logError } from '@/helpers/logger'
+import myTrackPlayer from '@/helpers/trackPlayerIndex'
 import {
 	WebDAVFile,
 	getAllMusicFiles,
@@ -21,7 +22,6 @@ import {
 	TouchableOpacity,
 	View,
 } from 'react-native'
-import TrackPlayer from 'react-native-track-player'
 
 // 文件项组件
 const FileItem = ({ file, onPress, onLongPress }) => {
@@ -173,8 +173,7 @@ const WebDAVScreen = () => {
 	const handlePlayFile = async (file: WebDAVFile) => {
 		try {
 			const musicItem = webdavFileToMusicItem(file)
-			await TrackPlayer.add(musicItem)
-			await TrackPlayer.play()
+			await myTrackPlayer.play(musicItem)
 			showToast(`正在播放: ${file.basename}`, 'success')
 		} catch (error) {
 			logError('播放文件失败:', error)
@@ -186,7 +185,7 @@ const WebDAVScreen = () => {
 	const handleAddToQueue = async (file: WebDAVFile) => {
 		try {
 			const musicItem = webdavFileToMusicItem(file)
-			await TrackPlayer.add(musicItem)
+			await myTrackPlayer.add(musicItem)
 			showToast(`已添加到队列: ${file.basename}`, 'success')
 		} catch (error) {
 			logError('添加到队列失败:', error)
@@ -213,8 +212,8 @@ const WebDAVScreen = () => {
 
 			// 转换为音乐项并播放
 			const musicItems = webdavFilesToMusicItems(musicFiles)
-			await TrackPlayer.add(musicItems)
-			await TrackPlayer.play()
+			await myTrackPlayer.addAll(musicItems)
+			await myTrackPlayer.play()
 
 			showToast(`正在播放目录中的 ${musicFiles.length} 首音乐`, 'success')
 		} catch (error) {

@@ -147,21 +147,8 @@ async function setupTrackPlayer() {
 		songsNumsToLoadStore.setValue(songsNumsToLoad)
 	}
 
-	// 设置播放器支持的格式
-	const capabilities = [
-		ReactNativeTrackPlayer.Capability.Play,
-		ReactNativeTrackPlayer.Capability.Pause,
-		ReactNativeTrackPlayer.Capability.SkipToNext,
-		ReactNativeTrackPlayer.Capability.SkipToPrevious,
-		ReactNativeTrackPlayer.Capability.Stop,
-		ReactNativeTrackPlayer.Capability.SeekTo,
-	]
-
-	// 支持WebDAV音乐文件格式
-	await ReactNativeTrackPlayer.setupPlayer({
-		capabilities,
-		supportedExtensions: ['mp3', 'flac', 'wav', 'ogg', 'm4a', 'aac'],
-	})
+	// 注意：播放器已经在useSetupTrackPlayer钩子中初始化，这里不需要再次初始化
+	// 只需加载事件监听器
 
 	if (!hasSetupListener) {
 		ReactNativeTrackPlayer.addEventListener(Event.PlaybackActiveTrackChanged, async (evt) => {
@@ -1012,18 +999,18 @@ const play = async (musicItem?: IMusic.IMusicItem | null, forcePlay?: boolean) =
 		// 10. 获取补充信息
 		// const info: Partial<IMusic.IMusicItem> | null = null
 	} catch (e: any) {
+		logError('音乐播放出错:', e)
 		const message = e?.message
+
+		// 处理播放器未初始化的情况
 		if (message === 'The player is not initialized. Call setupPlayer first.') {
-			await ReactNativeTrackPlayer.setupPlayer()
-			play(musicItem, forcePlay)
-		} else if (message === PlayFailReason.FORBID_CELLUAR_NETWORK_PLAY) {
-			logInfo('移动网络')
-		} else if (message === PlayFailReason.INVALID_SOURCE) {
-			logError('音源为空，播放失败')
-			await failToPlay()
-		} else if (message === PlayFailReason.PLAY_LIST_IS_EMPTY) {
-			// 队列是空的，不应该出现这种情况
+			logInfo('检测到播放器未初始化，尝试跳过重新初始化')
+			// 不要尝试重新初始化播放器，这可能导致冲突
+			// 而是处理当前正在播放的音乐
+			return
 		}
+
+		await play(null)
 	}
 }
 const cacheAndImportMusic = async (track: IMusic.IMusicItem) => {
