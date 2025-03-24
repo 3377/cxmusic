@@ -47,10 +47,20 @@ const App = () => {
 
 				// 初始化 WebDAV (可选)
 				try {
+					logInfo('开始初始化WebDAV服务')
 					await setupWebDAV()
-					logInfo('WebDAV initialized successfully')
+					logInfo('WebDAV初始化成功')
 				} catch (error) {
-					logError('WebDAV initialization failed, but continuing app startup:', error)
+					logError('WebDAV初始化失败，但继续应用启动:', error)
+					// 标记稍后重试
+					setTimeout(() => {
+						try {
+							setupWebDAV()
+							logInfo('WebDAV服务延迟初始化尝试')
+						} catch (retryError) {
+							logError('WebDAV服务延迟初始化失败:', retryError)
+						}
+					}, 3000)
 				}
 
 				// TrackPlayer已经在useSetupTrackPlayer中初始化
@@ -133,6 +143,32 @@ const App = () => {
 	if (initError) {
 		logError('App initialization failed:', initError)
 	}
+
+	useEffect(() => {
+		// 特别添加WebDAV服务初始化状态检查和重试机制
+		const checkWebDAVService = async () => {
+			try {
+				// 检查WebDAV服务状态
+				const currentServer = getCurrentWebDAVServer()
+
+				if (!currentServer) {
+					logInfo('WebDAV服务未配置或初始化不完全，重新尝试初始化')
+					// 重新尝试初始化WebDAV服务
+					await setupWebDAV()
+					logInfo('WebDAV服务重新初始化完成')
+				} else {
+					logInfo('WebDAV服务已正确初始化', currentServer.name)
+				}
+			} catch (error) {
+				logError('检查WebDAV服务状态失败:', error)
+			}
+		}
+
+		// 在应用初始化之后执行检查
+		if (isInitialized) {
+			checkWebDAVService()
+		}
+	}, [isInitialized])
 
 	return (
 		<ShareIntentProvider

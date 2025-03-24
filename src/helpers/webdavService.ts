@@ -662,3 +662,208 @@ export function useCurrentWebDAVServer() {
 
 	return server
 }
+
+// 添加额外的错误捕获和连接检查函数
+export const verifyWebDAVConnection = async (server: WebDAVServer): Promise<boolean> => {
+	try {
+		if (!server || !server.url) {
+			logError('无效的WebDAV服务器配置')
+			return false
+		}
+
+		const client = createClient(server.url, {
+			username: server.username || '',
+			password: server.password || '',
+		})
+
+		if (!client) {
+			logError('无法创建WebDAV客户端')
+			return false
+		}
+
+		// 尝试连接 - 获取根目录内容
+		await client.getDirectoryContents('/')
+		logInfo('WebDAV连接验证成功:', server.name)
+		return true
+	} catch (error) {
+		logError('WebDAV连接验证失败:', error)
+		return false
+	}
+}
+
+// 增强setupWebDAV函数中的错误处理
+export const setupWebDAV = async (): Promise<void> => {
+	try {
+		// 清除任何先前的状态，确保不会使用旧的无效数据
+		webdavServersStore.setState({
+			servers: [],
+			currentServer: null,
+			client: null,
+		})
+
+		// 获取存储的服务器列表
+		const serversString = await getStorage('webdav-servers')
+		let servers: WebDAVServer[] = []
+
+		if (serversString) {
+			try {
+				servers = JSON.parse(serversString)
+				logInfo(`已从存储中加载 ${servers.length} 个WebDAV服务器`)
+			} catch (parseError) {
+				logError('解析WebDAV服务器列表失败:', parseError)
+				// 如果无法解析，使用空数组
+				servers = []
+			}
+		}
+
+		// 初始化状态
+		webdavServersStore.setState({ servers })
+
+		// 如果有服务器，选择第一个作为当前服务器
+		if (servers.length > 0) {
+			try {
+				const defaultServer = servers[0]
+				logInfo('尝试连接到默认WebDAV服务器:', defaultServer.name)
+
+				// 在连接前验证服务器配置
+				if (!defaultServer.url) {
+					throw new Error('服务器URL未定义')
+				}
+
+				const isValid = await verifyWebDAVConnection(defaultServer)
+				if (!isValid) {
+					throw new Error('服务器连接验证失败')
+				}
+
+				// 创建客户端
+				const client = createClient(defaultServer.url, {
+					username: defaultServer.username || '',
+					password: defaultServer.password || '',
+				})
+
+				// 更新状态
+				webdavServersStore.setState({
+					currentServer: defaultServer,
+					client,
+				})
+
+				logInfo('WebDAV初始化完成，默认服务器已连接:', defaultServer.name)
+			} catch (error) {
+				logError('连接默认WebDAV服务器失败:', error)
+				// 初始化失败时重置状态
+				webdavServersStore.setState({
+					currentServer: null,
+					client: null,
+				})
+			}
+		} else {
+			logInfo('没有找到WebDAV服务器配置')
+		}
+	} catch (error) {
+		logError('WebDAV初始化失败:', error)
+		// 重置状态确保应用不会使用无效数据
+		webdavServersStore.setState({
+			servers: [],
+			currentServer: null,
+			client: null,
+		})
+	}
+}
+
+// 增强获取文件URL的函数
+export const getFileUrl = (file: WebDAVFile): string => {
+	try {
+		if (!file || !file.filename) {
+			throw new Error('文件信息无效')
+		}
+
+		const currentServer = getCurrentWebDAVServer()
+		if (!currentServer) {
+			throw new Error('未连接WebDAV服务器')
+		}
+
+		// 组合URL时确保路径正确
+		let baseUrl = currentServer.url || ''
+		if (!baseUrl.endsWith('/')) {
+			baseUrl += '/'
+		}
+
+		// 规范化文件路径
+		let filePath = file.filename
+		while (filePath.startsWith('/')) {
+			filePath = filePath.substring(1)
+		}
+
+		// 构建完整URL
+		const fileUrl = `${baseUrl}${filePath}`
+
+		// 如果需要授权头信息
+		if (currentServer.username && currentServer.password) {
+			const authHeader = `Basic ${btoa(`${currentServer.username}:${currentServer.password}`)}`
+			return fileUrl + `?auth=${encodeURIComponent(authHeader)}`
+		}
+
+		return fileUrl
+	} catch (error) {
+		logError('构建WebDAV文件URL失败:', error)
+		// 返回安全的替代URL
+		return 'error://invalid-file-url'
+	}
+}
+
+// 增强播放项目创建函数
+export const webdavFileToMusicItem = (file: WebDAVFile): MusicItem => {
+	try {
+		if (!file) {
+			throw new Error('文件对象为空')
+		}
+
+		const currentServer = getCurrentWebDAVServer()
+		if (!currentServer) {
+			throw new Error('未连接WebDAV服务器')
+		}
+
+		// 安全地创建ID
+		const id = `webdav-${currentServer.name}-${file.filename}`.replace(/[^a-zA-Z0-9-]/g, '-')
+
+		// 从文件名中获取标题
+		let title = file.basename || '未知文件'
+
+		// 如果有扩展名，移除扩展名以获取歌曲标题
+		const lastDotIndex = title.lastIndexOf('.')
+		if (lastDotIndex > 0) {
+			title = title.substring(0, lastDotIndex)
+		}
+
+		// 构建基本的音乐项目
+		const musicItem: MusicItem = {
+			id,
+			title,
+			artist: '未知艺术家',
+			album: '未知专辑',
+			artwork: '', // 没有专辑封面
+			url: getFileUrl(file),
+			duration: 0, // 未知时长
+			isLocal: false,
+			fromWebDAV: true,
+		}
+
+		// 如果文件有额外的音乐元数据，可以在这里添加
+
+		return musicItem
+	} catch (error) {
+		logError('创建WebDAV音乐项目失败:', error)
+		// 返回最小化的音乐项目以避免崩溃
+		return {
+			id: `error-item-${Date.now()}`,
+			title: file?.basename || '错误的文件',
+			artist: '未知',
+			album: '未知',
+			artwork: '',
+			url: 'about:blank',
+			duration: 0,
+			isLocal: false,
+			fromWebDAV: true,
+		}
+	}
+}

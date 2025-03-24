@@ -9,8 +9,9 @@ import {
 	setDefaultWebDAVServer,
 	useWebDAVServers,
 } from '@/helpers/webdavService'
+import { useTheme } from '@/hooks/useTheme'
 import { showToast } from '@/utils/utils'
-import { Ionicons } from '@expo/vector-icons'
+import { Feather, Ionicons } from '@expo/vector-icons'
 import { useRouter } from 'expo-router'
 import React, { useCallback, useEffect, useState } from 'react'
 import {
@@ -25,38 +26,50 @@ import {
 	TouchableOpacity,
 	View,
 } from 'react-native'
+import { TouchableRipple } from 'react-native-paper'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 
 // 错误边界组件
 class ErrorBoundary extends React.Component {
-	state = { hasError: false }
+	state = { hasError: false, error: null }
 
-	static getDerivedStateFromError() {
-		return { hasError: true }
+	static getDerivedStateFromError(error) {
+		return { hasError: true, error }
 	}
 
-	componentDidCatch(error, info) {
-		logError('WebDAV模态窗口错误:', error, info)
+	componentDidCatch(error, errorInfo) {
+		logError('WebDAV模态窗口渲染错误:', error, errorInfo)
+	}
+
+	retry = () => {
+		this.setState({ hasError: false, error: null })
 	}
 
 	render() {
+		const theme = useTheme()
 		if (this.state.hasError) {
 			return (
-				<View
-					style={[
-						styles.container,
-						{ justifyContent: 'center', alignItems: 'center', padding: 20 },
-					]}
-				>
-					<Text style={{ fontSize: 20, fontWeight: 'bold', marginBottom: 20 }}>
-						加载WebDAV设置失败
-					</Text>
-					<TouchableOpacity
-						style={styles.addButton}
-						onPress={() => this.setState({ hasError: false })}
+				<View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', padding: 20 }}>
+					<Feather name="alert-triangle" size={48} color={theme.colors.error} />
+					<Text
+						style={{ marginTop: 16, color: theme.colors.text, textAlign: 'center', fontSize: 16 }}
 					>
-						<Text style={styles.addButtonText}>重试</Text>
-					</TouchableOpacity>
+						WebDAV设置页面加载失败
+					</Text>
+					<Text style={{ marginTop: 8, color: theme.colors.textSecondary, textAlign: 'center' }}>
+						{this.state.error?.message || '未知错误'}
+					</Text>
+					<TouchableRipple
+						onPress={this.retry}
+						style={{
+							marginTop: 16,
+							backgroundColor: theme.colors.primary,
+							padding: 12,
+							borderRadius: 8,
+						}}
+					>
+						<Text style={{ color: theme.colors.onPrimary }}>重试</Text>
+					</TouchableRipple>
 				</View>
 			)
 		}
@@ -306,6 +319,31 @@ const ServerItem = ({ server, onEdit, onDelete, onSetDefault, onTest, isCurrentS
 	}
 }
 
+// 在函数组件开头添加以下函数
+const validateServerConfig = (server) => {
+	try {
+		if (!server.name || server.name.trim() === '') {
+			return '服务器名称不能为空'
+		}
+
+		if (!server.url || server.url.trim() === '') {
+			return '服务器地址不能为空'
+		}
+
+		// 简单验证URL格式
+		try {
+			new URL(server.url)
+		} catch (e) {
+			return '服务器地址格式不正确'
+		}
+
+		return null // 没有错误
+	} catch (error) {
+		logError('验证WebDAV服务器配置失败:', error)
+		return '验证服务器配置时出错'
+	}
+}
+
 // 主页面组件
 const WebDAVModal = () => {
 	const insets = useSafeAreaInsets()
@@ -317,6 +355,7 @@ const WebDAVModal = () => {
 	const [currentServerState, setCurrentServerState] = useState<WebDAVServer | null>(null)
 	const [isComponentMounted, setIsComponentMounted] = useState(false)
 	const [loadError, setLoadError] = useState<string | null>(null)
+	const [error, setError] = useState<string | null>(null)
 
 	// 组件挂载状态管理
 	useEffect(() => {
