@@ -10,109 +10,87 @@ import { Alert, StyleSheet } from 'react-native'
 
 const TabsNavigation = () => {
 	const language = nowLanguage.useValue()
-	const [isWebdavLoading, setIsWebdavLoading] = useState(false)
-	const debounceTimerRef = useRef<NodeJS.Timeout | null>(null)
+	const [isNavigating, setIsNavigating] = useState(false)
+	const debounceTimer = useRef(null)
 
-	// 清理所有计时器
+	// 简单的防抖函数
+	const debounce = (func, wait) => {
+		return (...args) => {
+			if (debounceTimer.current) {
+				clearTimeout(debounceTimer.current)
+			}
+			debounceTimer.current = setTimeout(() => {
+				func.apply(null, args)
+			}, wait)
+		}
+	}
+
+	// 清理定时器
 	useEffect(() => {
 		return () => {
-			if (debounceTimerRef.current) {
-				clearTimeout(debounceTimerRef.current)
-				debounceTimerRef.current = null
+			if (debounceTimer.current) {
+				clearTimeout(debounceTimer.current)
 			}
 		}
 	}, [])
 
-	// 完全重写的WebDAV导航函数
-	const navigateToWebDAV = useCallback(() => {
-		// 如果已经在加载中，防止重复点击
-		if (isWebdavLoading) {
-			return
-		}
+	// 简化的WebDAV导航函数
+	const navigateToWebDAV = useCallback(
+		debounce(async () => {
+			// 如果正在导航中,直接返回
+			if (isNavigating) return
 
-		// 设置加载状态
-		setIsWebdavLoading(true)
+			try {
+				setIsNavigating(true)
 
-		// 清除现有定时器
-		if (debounceTimerRef.current) {
-			clearTimeout(debounceTimerRef.current)
-			debounceTimerRef.current = null
-		}
+				// 导入WebDAV模块并初始化
+				const webdavModule = await import('@/helpers/webdavService')
+				const currentServer = webdavModule.getCurrentWebDAVServer()
 
-		// 添加防抖
-		debounceTimerRef.current = setTimeout(() => {
-			const setupAndNavigate = async () => {
-				try {
-					// 确保导入模块不会失败
-					let webdavModule
-					try {
-						webdavModule = await import('@/helpers/webdavService')
-					} catch (importError) {
-						logError('导入WebDAV模块失败:', importError)
-						Alert.alert('错误', '无法加载WebDAV功能')
-						return false
-					}
-
-					// 尝试设置WebDAV
+				// 如果没有当前服务器,先初始化
+				if (!currentServer) {
 					try {
 						await webdavModule.setupWebDAV()
 					} catch (setupError) {
-						logError('WebDAV设置失败:', setupError)
-						// 继续尝试导航 - 错误会在WebDAV页面内处理
+						logError('WebDAV初始化失败:', setupError)
+						// 继续导航,错误会在WebDAV页面处理
 					}
-
-					// 尝试导航 (使用navigate而不是replace)
-					router.navigate('/(tabs)/webdav')
-					return true
-				} catch (error) {
-					logError('WebDAV导航过程中发生错误:', error)
-					Alert.alert('提示', '无法访问WebDAV，请稍后再试')
-					return false
-				} finally {
-					// 无论成功失败都重置状态
-					setIsWebdavLoading(false)
 				}
+
+				// 使用统一的导航路径
+				router.push('/(tabs)/webdav')
+			} catch (error) {
+				logError('WebDAV导航失败:', error)
+				Alert.alert('提示', '无法访问WebDAV，请稍后再试')
+			} finally {
+				// 确保重置导航状态
+				setIsNavigating(false)
 			}
+		}, 300),
+		[isNavigating],
+	)
 
-			// 执行导航
-			setupAndNavigate()
-		}, 300)
-	}, [isWebdavLoading])
-
-	// 处理底部标签栏点击
+	// 处理标签点击
 	const handleTabPress = useCallback(
 		(event) => {
-			try {
-				// 检查是否是WebDAV标签的点击
-				if (event.target === 'webdav') {
-					// 阻止默认导航行为
-					event.preventDefault()
-					// 使用我们自己的导航函数
-					navigateToWebDAV()
-				}
-			} catch (error) {
-				logError('标签点击错误:', error)
+			if (event.target === 'webdav') {
+				event.preventDefault()
+				navigateToWebDAV()
 			}
 		},
 		[navigateToWebDAV],
 	)
 
-	// 渲染WebDAV图标，根据加载状态显示不同图标
+	// 渲染WebDAV图标
 	const renderWebDAVTab = useCallback(
 		({ color }) => {
-			try {
-				if (isWebdavLoading) {
-					// 显示加载中图标
-					return <MaterialCommunityIcons name="cloud-sync" size={24} color={color} />
-				}
-				// 显示普通图标
-				return <Ionicons name="cloud-outline" size={24} color={color} />
-			} catch (error) {
-				logError('渲染WebDAV图标失败:', error)
-				return <Ionicons name="alert-circle" size={24} color="red" />
-			}
+			return isNavigating ? (
+				<MaterialCommunityIcons name="cloud-sync" size={24} color={color} />
+			) : (
+				<Ionicons name="cloud-outline" size={24} color={color} />
+			)
 		},
-		[isWebdavLoading],
+		[isNavigating],
 	)
 
 	return (
@@ -170,7 +148,6 @@ const TabsNavigation = () => {
 						title: 'WebDAV',
 						tabBarIcon: renderWebDAVTab,
 					}}
-					// 完全禁用直接点击导航，全部通过我们的自定义导航函数处理
 					listeners={{
 						tabPress: (e) => {
 							e.preventDefault()

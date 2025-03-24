@@ -75,7 +75,7 @@ class ErrorBoundary extends React.Component {
 }
 
 // 服务器编辑模态窗口
-const ServerEditModal = ({ isVisible, onClose, initialServer = null }) => {
+const ServerEditModal = ({ isVisible, onClose, initialServer = null, loadServers }) => {
 	const [name, setName] = useState('')
 	const [url, setUrl] = useState('')
 	const [isHttps, setIsHttps] = useState(true)
@@ -83,53 +83,46 @@ const ServerEditModal = ({ isVisible, onClose, initialServer = null }) => {
 	const [password, setPassword] = useState('')
 	const [isDefault, setIsDefault] = useState(false)
 	const [isLoading, setIsLoading] = useState(false)
-	const [isComponentMounted, setIsComponentMounted] = useState(false)
 	const [isTesting, setIsTesting] = useState(false)
-
-	// 组件挂载状态管理
-	useEffect(() => {
-		setIsComponentMounted(true)
-		return () => setIsComponentMounted(false)
-	}, [])
+	const router = useRouter()
 
 	// 当模态窗口显示时，初始化表单数据
 	useEffect(() => {
-		try {
-			if (isVisible && isComponentMounted) {
-				if (initialServer) {
-					// 编辑现有服务器
-					setName(initialServer.name || '')
-
-					// 解析URL，提取协议和主机地址
-					let serverUrl = initialServer.url || ''
-					const isServerHttps = serverUrl.startsWith('https://')
-					setIsHttps(isServerHttps)
-
-					// 移除协议前缀
-					serverUrl = serverUrl.replace(/^https?:\/\//i, '')
-					setUrl(serverUrl)
-
-					setUsername(initialServer.username || '')
-					setPassword(initialServer.password || '')
-					setIsDefault(!!initialServer.isDefault)
-				} else {
-					// 添加新服务器
-					setName('')
-					setUrl('')
-					setIsHttps(true)
-					setUsername('')
-					setPassword('')
-					setIsDefault(false)
-				}
+		if (isVisible) {
+			if (initialServer) {
+				setName(initialServer.name || '')
+				let serverUrl = initialServer.url || ''
+				const isServerHttps = serverUrl.startsWith('https://')
+				setIsHttps(isServerHttps)
+				serverUrl = serverUrl.replace(/^https?:\/\//i, '')
+				setUrl(serverUrl)
+				setUsername(initialServer.username || '')
+				setPassword(initialServer.password || '')
+				setIsDefault(!!initialServer.isDefault)
+			} else {
+				setName('')
+				setUrl('')
+				setIsHttps(true)
+				setUsername('')
+				setPassword('')
+				setIsDefault(false)
 			}
-		} catch (error) {
-			logError('更新服务器编辑表单失败:', error)
 		}
-	}, [initialServer, isVisible, isComponentMounted])
+	}, [initialServer, isVisible])
+
+	// 简化的关闭处理函数
+	const handleClose = useCallback(
+		(shouldRefresh = false) => {
+			try {
+				onClose(shouldRefresh)
+			} catch (error) {
+				logError('关闭模态窗口失败:', error)
+			}
+		},
+		[onClose],
+	)
 
 	const handleSave = useCallback(async () => {
-		if (!isComponentMounted) return
-
 		if (!name || !url) {
 			Alert.alert('错误', '服务器名称和URL不能为空')
 			return
@@ -172,10 +165,8 @@ const ServerEditModal = ({ isVisible, onClose, initialServer = null }) => {
 					isDefault,
 				})
 
-				if (isComponentMounted) {
-					showToast('服务器更新成功', 'success')
-					onClose(true)
-				}
+				showToast('服务器更新成功', 'success')
+				onClose(true)
 			} else {
 				// 创建新服务器
 				const id = await addWebDAVServer({
@@ -186,7 +177,7 @@ const ServerEditModal = ({ isVisible, onClose, initialServer = null }) => {
 					isDefault,
 				})
 
-				if (isComponentMounted && id) {
+				if (id) {
 					showToast('服务器添加成功', 'success')
 					onClose(true)
 				} else {
@@ -195,33 +186,17 @@ const ServerEditModal = ({ isVisible, onClose, initialServer = null }) => {
 			}
 		} catch (error) {
 			logError(`${initialServer ? '更新' : '添加'}服务器失败:`, error)
-			if (isComponentMounted) {
-				Alert.alert(
-					'错误',
-					`${initialServer ? '更新' : '添加'}服务器失败: ${error.message || '未知错误'}`,
-				)
-			}
+			Alert.alert(
+				'错误',
+				`${initialServer ? '更新' : '添加'}服务器失败: ${error.message || '未知错误'}`,
+			)
 		} finally {
-			if (isComponentMounted) {
-				setIsLoading(false)
-			}
+			setIsLoading(false)
 		}
-	}, [
-		name,
-		url,
-		isHttps,
-		username,
-		password,
-		isDefault,
-		initialServer,
-		onClose,
-		isComponentMounted,
-	])
+	}, [name, url, isHttps, username, password, isDefault, initialServer, onClose])
 
 	// 新增：测试连接函数
 	const handleTestConnection = useCallback(async () => {
-		if (!isComponentMounted) return
-
 		if (!url.trim()) {
 			Alert.alert('错误', '请输入有效的服务器地址')
 			return
@@ -270,13 +245,8 @@ const ServerEditModal = ({ isVisible, onClose, initialServer = null }) => {
 			// 测试连接
 			try {
 				await testClient.getDirectoryContents('/')
-				if (isComponentMounted) {
-					Alert.alert('成功', '服务器连接测试成功！')
-				}
+				Alert.alert('成功', '服务器连接测试成功！')
 			} catch (testError) {
-				if (!isComponentMounted) return
-
-				// 添加更具体的错误信息
 				let errorMessage = '服务器连接测试失败'
 
 				if (testError.status === 401) {
@@ -294,69 +264,11 @@ const ServerEditModal = ({ isVisible, onClose, initialServer = null }) => {
 				Alert.alert('连接失败', `${errorMessage}: ${testError.message || '未知错误'}`)
 			}
 		} catch (error) {
-			if (isComponentMounted) {
-				Alert.alert('错误', `测试连接失败: ${error.message || '未知错误'}`)
-			}
+			Alert.alert('错误', `测试连接失败: ${error.message || '未知错误'}`)
 		} finally {
-			if (isComponentMounted) {
-				setIsTesting(false)
-			}
+			setIsTesting(false)
 		}
-	}, [name, url, isHttps, username, password, isComponentMounted])
-
-	// 安全地关闭模态窗口
-	const handleClose = useCallback(
-		(shouldRefresh = false) => {
-			try {
-				if (!isComponentMounted) return
-				setModalVisible(false)
-				if (shouldRefresh) {
-					loadServers()
-				}
-			} catch (error) {
-				logError('关闭模态窗口失败:', error)
-			}
-		},
-		[isComponentMounted, loadServers],
-	)
-
-	const handleGoBack = useCallback(() => {
-		try {
-			if (modalVisible) {
-				// 如果模态窗口打开，先关闭它
-				setModalVisible(false)
-				return
-			}
-
-			// 确保组件仍然挂载
-			if (!isComponentMounted) return
-
-			// 直接尝试返回上一页面
-			router.back()
-
-			// 添加备用导航，如果back()不起作用
-			setTimeout(() => {
-				// 只有在组件仍然挂载的情况下继续
-				if (isComponentMounted) {
-					try {
-						router.replace('/(tabs)')
-					} catch (err) {
-						// 最后的尝试：硬编码返回主页
-						router.replace('/(tabs)/(songs)')
-					}
-				}
-			}, 100)
-		} catch (error) {
-			logError('导航返回失败:', error)
-			// 保险措施 - 尝试直接导航到主屏幕
-			try {
-				router.replace('/(tabs)/(songs)')
-			} catch (innerError) {
-				logError('所有导航方法都失败:', innerError)
-				Alert.alert('提示', '无法返回，请尝试关闭应用')
-			}
-		}
-	}, [isComponentMounted, router, modalVisible])
+	}, [name, url, isHttps, username, password])
 
 	if (!isVisible) return null
 
@@ -742,54 +654,46 @@ const WebDAVModal = () => {
 		(shouldRefresh: boolean) => {
 			try {
 				if (!isComponentMounted) return
+
+				// 先关闭模态窗口
 				setModalVisible(false)
+
+				// 如果需要刷新,执行刷新
 				if (shouldRefresh) {
 					loadServers()
 				}
+
+				// 延迟执行返回,确保模态窗口已经关闭
+				setTimeout(() => {
+					if (isComponentMounted) {
+						router.back()
+					}
+				}, 100)
 			} catch (error) {
 				logError('关闭模态窗口失败:', error)
+				// 发生错误时尝试强制返回
+				router.back()
 			}
 		},
-		[isComponentMounted, loadServers],
+		[isComponentMounted, loadServers, router],
 	)
 
 	const handleGoBack = useCallback(() => {
 		try {
+			// 如果模态窗口打开,先关闭它
 			if (modalVisible) {
-				// 如果模态窗口打开，先关闭它
 				setModalVisible(false)
 				return
 			}
 
-			// 确保组件仍然挂载
-			if (!isComponentMounted) return
-
-			// 直接尝试返回上一页面
+			// 否则直接返回
 			router.back()
-
-			// 添加备用导航，如果back()不起作用
-			setTimeout(() => {
-				// 只有在组件仍然挂载的情况下继续
-				if (isComponentMounted) {
-					try {
-						router.replace('/(tabs)')
-					} catch (err) {
-						// 最后的尝试：硬编码返回主页
-						router.replace('/(tabs)/(songs)')
-					}
-				}
-			}, 100)
 		} catch (error) {
-			logError('导航返回失败:', error)
-			// 保险措施 - 尝试直接导航到主屏幕
-			try {
-				router.replace('/(tabs)/(songs)')
-			} catch (innerError) {
-				logError('所有导航方法都失败:', innerError)
-				Alert.alert('提示', '无法返回，请尝试关闭应用')
-			}
+			logError('返回失败:', error)
+			// 发生错误时尝试强制返回到主页
+			router.replace('/(tabs)')
 		}
-	}, [isComponentMounted, router, modalVisible])
+	}, [modalVisible, router])
 
 	const renderItem = useCallback(
 		({ item }) => {
@@ -915,6 +819,7 @@ const WebDAVModal = () => {
 					isVisible={modalVisible}
 					onClose={handleCloseModal}
 					initialServer={selectedServer}
+					loadServers={loadServers}
 				/>
 			</View>
 		)
@@ -970,6 +875,7 @@ const WebDAVModal = () => {
 					isVisible={modalVisible}
 					onClose={handleCloseModal}
 					initialServer={selectedServer}
+					loadServers={loadServers}
 				/>
 			</View>
 		</ErrorBoundary>
