@@ -3,9 +3,8 @@ import { logError, logInfo } from '@/helpers/logger'
 import { getCurrentWebDAVServer } from '@/helpers/webdavService'
 import { Feather } from '@expo/vector-icons'
 import { Redirect, Stack, useRouter } from 'expo-router'
-import { useCallback, useEffect, useState } from 'react'
-import { ActivityIndicator, Text, View } from 'react-native'
-import { TouchableRipple } from 'react-native-paper'
+import React, { useCallback, useEffect, useState } from 'react'
+import { ActivityIndicator, Text, TouchableOpacity, View } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 
 // 错误边界组件
@@ -42,7 +41,7 @@ class ErrorBoundary extends React.Component {
 					<Text style={{ fontSize: 14, marginBottom: 20, textAlign: 'center' }}>
 						这可能是由于网络连接问题或WebDAV服务器配置不正确导致的
 					</Text>
-					<TouchableRipple
+					<TouchableOpacity
 						onPress={this.retry}
 						style={{
 							padding: 12,
@@ -51,7 +50,7 @@ class ErrorBoundary extends React.Component {
 						}}
 					>
 						<Text style={{ color: '#fff', fontWeight: 'bold' }}>重试</Text>
-					</TouchableRipple>
+					</TouchableOpacity>
 				</View>
 			)
 		}
@@ -131,7 +130,7 @@ export default function WebDavLayout() {
 			>
 				<Feather name="alert-circle" size={48} color="red" />
 				<Text style={{ color: colors.text, marginTop: 16 }}>WebDAV服务未配置或初始化失败</Text>
-				<TouchableRipple
+				<TouchableOpacity
 					onPress={checkWebDAVServiceReady}
 					style={{
 						padding: 12,
@@ -141,8 +140,8 @@ export default function WebDavLayout() {
 					}}
 				>
 					<Text style={{ color: 'white' }}>重试</Text>
-				</TouchableRipple>
-				<TouchableRipple
+				</TouchableOpacity>
+				<TouchableOpacity
 					onPress={onSettingsPress}
 					style={{
 						padding: 12,
@@ -152,7 +151,7 @@ export default function WebDavLayout() {
 					}}
 				>
 					<Text style={{ color: 'white' }}>配置WebDAV</Text>
-				</TouchableRipple>
+				</TouchableOpacity>
 			</View>
 		)
 	}
@@ -164,12 +163,12 @@ export default function WebDavLayout() {
 					headerRight: () => {
 						try {
 							return (
-								<TouchableRipple
+								<TouchableOpacity
 									onPress={onSettingsPress}
 									style={{ padding: 8, marginRight: 8, borderRadius: 20 }}
 								>
 									<Feather name="settings" size={24} color={colors.text} />
-								</TouchableRipple>
+								</TouchableOpacity>
 							)
 						} catch (error) {
 							logError('渲染WebDAV设置按钮失败:', error)

@@ -25,7 +25,6 @@ import {
 	TouchableOpacity,
 	View,
 } from 'react-native'
-import { TouchableRipple } from 'react-native-paper'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 
 // 错误边界组件
@@ -55,7 +54,7 @@ class ErrorBoundary extends React.Component {
 					<Text style={{ marginTop: 8, color: colors.textMuted, textAlign: 'center' }}>
 						{this.state.error?.message || '未知错误'}
 					</Text>
-					<TouchableRipple
+					<TouchableOpacity
 						onPress={this.retry}
 						style={{
 							marginTop: 16,
@@ -65,7 +64,7 @@ class ErrorBoundary extends React.Component {
 						}}
 					>
 						<Text style={{ color: 'white' }}>重试</Text>
-					</TouchableRipple>
+					</TouchableOpacity>
 				</View>
 			)
 		}

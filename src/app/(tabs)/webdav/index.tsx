@@ -7,7 +7,6 @@ import { Feather } from '@expo/vector-icons'
 import { useRouter } from 'expo-router'
 import React, { useCallback, useEffect, useState } from 'react'
 import { ActivityIndicator, FlatList, Text, TouchableOpacity, View } from 'react-native'
-import { TouchableRipple } from 'react-native-paper'
 import { WebDAVClient } from 'webdav'
 
 // 处理日期格式化，安全返回格式化后的日期或占位符
@@ -26,7 +25,7 @@ function FileItem({ file, onPress, onLongPress }) {
 	const isDirectory = file.type === 'directory'
 
 	return (
-		<TouchableRipple
+		<TouchableOpacity
 			onPress={() => onPress(file)}
 			onLongPress={() => onLongPress(file)}
 			style={{
@@ -50,7 +49,7 @@ function FileItem({ file, onPress, onLongPress }) {
 					</Text>
 				</View>
 			</View>
-		</TouchableRipple>
+		</TouchableOpacity>
 	)
 }
 
@@ -70,7 +69,7 @@ function EmptyContent({ onRefresh }) {
 		<View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', padding: 20 }}>
 			<Feather name="inbox" size={48} color={colors.textMuted} />
 			<Text style={{ marginTop: 16, color: colors.text, fontSize: 16 }}>文件夹为空</Text>
-			<TouchableRipple
+			<TouchableOpacity
 				onPress={onRefresh}
 				style={{
 					marginTop: 16,
@@ -80,7 +79,7 @@ function EmptyContent({ onRefresh }) {
 				}}
 			>
 				<Text style={{ color: '#fff' }}>刷新</Text>
-			</TouchableRipple>
+			</TouchableOpacity>
 		</View>
 	)
 }
@@ -115,7 +114,7 @@ class ErrorCatcher extends React.Component {
 					<Text style={{ marginTop: 8, color: colors.textMuted, textAlign: 'center' }}>
 						{this.state.error?.message || '未知错误'}
 					</Text>
-					<TouchableRipple
+					<TouchableOpacity
 						onPress={this.retry}
 						style={{
 							marginTop: 16,
@@ -125,7 +124,7 @@ class ErrorCatcher extends React.Component {
 						}}
 					>
 						<Text style={{ color: '#fff' }}>重试</Text>
-					</TouchableRipple>
+					</TouchableOpacity>
 				</View>
 			)
 		}
@@ -283,7 +282,7 @@ export default function WebDavScreen() {
 					<View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', padding: 20 }}>
 						<Feather name="alert-circle" size={48} color="red" />
 						<Text style={{ marginTop: 16, color: colors.text, textAlign: 'center' }}>{error}</Text>
-						<TouchableRipple
+						<TouchableOpacity
 							onPress={refreshFiles}
 							style={{
 								marginTop: 16,
@@ -293,7 +292,7 @@ export default function WebDavScreen() {
 							}}
 						>
 							<Text style={{ color: '#fff' }}>重试</Text>
-						</TouchableRipple>
+						</TouchableOpacity>
 					</View>
 				) : files.length === 0 ? (
 					<EmptyContent onRefresh={refreshFiles} />
