@@ -702,28 +702,33 @@ const WebDAVModal = () => {
 			try {
 				if (!isComponentMounted) return
 				setModalVisible(false)
+				if (shouldRefresh) {
+					loadServers()
+				}
 			} catch (error) {
 				logError('关闭模态窗口失败:', error)
 			}
 		},
-		[isComponentMounted],
+		[isComponentMounted, loadServers],
 	)
 
 	const handleGoBack = useCallback(() => {
 		try {
+			if (!isComponentMounted) return
+			// 先关闭模态窗口
+			setModalVisible(false)
+			// 然后执行返回导航
 			router.back()
 		} catch (error) {
 			logError('导航返回失败:', error)
-			// 尝试使用延迟来执行导航
-			setTimeout(() => {
-				try {
-					router.back()
-				} catch (innerError) {
-					logError('再次尝试导航返回失败:', innerError)
-				}
-			}, 100)
+			// 如果router.back()失败,尝试使用replace
+			try {
+				router.replace('/(tabs)')
+			} catch (innerError) {
+				logError('导航替换失败:', innerError)
+			}
 		}
-	}, [router])
+	}, [isComponentMounted, router])
 
 	const renderItem = useCallback(
 		({ item }) => {

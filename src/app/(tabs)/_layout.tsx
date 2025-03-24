@@ -45,116 +45,58 @@ const TabsNavigation = () => {
 	// 使用防抖技术来处理WebDAV导航
 	const navigateToWebDAV = useCallback(() => {
 		try {
-			// 阻止重叠导航请求
-			if (isNavigating || hasNavigated) {
-				logInfo('已有WebDAV导航请求正在处理中，忽略新请求')
-				return
-			}
-
-			// 阻止过多的导航尝试
-			if (navigationCountRef.current > 2) {
-				logError('WebDAV导航尝试次数过多，已中止')
-				Alert.alert('提示', '无法访问WebDAV，请稍后再试')
-
-				// 5秒后重置计数
-				setTimeout(() => {
-					navigationCountRef.current = 0
-					setIsNavigating(false)
-					setHasNavigated(false)
-				}, 5000)
+			// 如果正在导航中,直接返回
+			if (isNavigating) {
+				logInfo('WebDAV导航正在进行中,忽略新请求')
 				return
 			}
 
 			// 设置导航状态
 			setIsNavigating(true)
 
-			// 清除任何已有的导航定时器
+			// 清除任何已有的防抖定时器
 			if (debounceTimerRef.current) {
 				clearTimeout(debounceTimerRef.current)
 			}
 
 			// 使用防抖动技术防止快速点击
-			debounceTimerRef.current = setTimeout(() => {
-				// 标记已经开始导航流程
-				setHasNavigated(true)
-				navigationCountRef.current += 1
+			debounceTimerRef.current = setTimeout(async () => {
+				try {
+					// 导入WebDAV模块
+					const webdavModule = await import('@/helpers/webdavService')
 
-				// 安全版的导航函数
-				const safeNavigate = () => {
-					try {
-						// 包装导航操作在try/catch内，并添加超时防护
-						setTimeout(() => {
-							try {
-								// 打开前检查WebDAV服务是否已初始化
-								import('@/helpers/webdavService')
-									.then(async (webdavModule) => {
-										try {
-											// 检查WebDAV服务是否已初始化，如果没有则初始化
-											const currentServer = webdavModule.getCurrentWebDAVServer()
-											if (!currentServer) {
-												logInfo('正在初始化WebDAV服务...')
-												try {
-													await webdavModule.setupWebDAV()
-												} catch (setupError) {
-													logError('WebDAV服务初始化失败，但仍将继续导航', setupError)
-													// 即使初始化失败，也继续导航到WebDAV页面，页面会显示相应提示
-												}
-											}
-
-											// 以避免直接重定向的方式导航
-											setTimeout(() => {
-												try {
-													// 使用replace而不是navigate，以避免导航堆栈问题
-													router.replace('/(tabs)/webdav')
-
-													// 导航成功后，延迟重置状态
-													setTimeout(() => {
-														setIsNavigating(false)
-														setHasNavigated(false)
-													}, 1000)
-												} catch (routerError) {
-													logError('WebDAV页面跳转失败:', routerError)
-													setIsNavigating(false)
-													setHasNavigated(false)
-													Alert.alert('提示', '页面加载失败，请稍后再试')
-												}
-											}, 100)
-										} catch (error) {
-											logError('WebDAV服务检查失败:', error)
-											setIsNavigating(false)
-											setHasNavigated(false)
-										}
-									})
-									.catch((error) => {
-										logError('无法导入WebDAV模块:', error)
-										setIsNavigating(false)
-										setHasNavigated(false)
-									})
-							} catch (navError) {
-								logError('WebDAV导航执行失败:', navError)
-								// 恢复状态
-								setIsNavigating(false)
-								setHasNavigated(false)
-							}
-						}, 100)
-					} catch (error) {
-						logError('安全导航函数执行失败:', error)
-						// 恢复状态
-						setIsNavigating(false)
-						setHasNavigated(false)
+					// 检查WebDAV服务是否已初始化
+					const currentServer = webdavModule.getCurrentWebDAVServer()
+					if (!currentServer) {
+						logInfo('正在初始化WebDAV服务...')
+						try {
+							await webdavModule.setupWebDAV()
+						} catch (setupError) {
+							logError('WebDAV服务初始化失败:', setupError)
+							// 即使初始化失败也继续导航
+						}
 					}
-				}
 
-				// 执行导航逻辑
-				safeNavigate()
+					// 执行导航
+					router.replace('/(tabs)/webdav')
+
+					// 导航成功后重置状态
+					setIsNavigating(false)
+					setHasNavigated(true)
+				} catch (error) {
+					logError('WebDAV导航失败:', error)
+					Alert.alert('提示', '页面加载失败,请稍后再试')
+					// 发生错误时重置状态
+					setIsNavigating(false)
+					setHasNavigated(false)
+				}
 			}, 300) // 300ms防抖延迟
 		} catch (error) {
 			logError('WebDAV导航处理失败:', error)
-			// 恢复状态
 			setIsNavigating(false)
 			setHasNavigated(false)
 		}
-	}, [hasNavigated, isNavigating])
+	}, [isNavigating, router])
 
 	// 处理底部标签栏点击
 	const handleTabPress = useCallback(
