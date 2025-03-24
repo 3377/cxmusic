@@ -1,4 +1,3 @@
-import { getStorage } from '@/helpers/storage'
 import { GlobalState } from '@/utils/stateMapper'
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import { useEffect, useState } from 'react'
@@ -664,84 +663,5 @@ export const verifyWebDAVConnection = async (server: WebDAVServer): Promise<bool
 	} catch (error) {
 		logError('WebDAV连接验证失败:', error)
 		return false
-	}
-}
-
-// 增强setupWebDAV函数中的错误处理
-export const setupWebDAV = async (): Promise<void> => {
-	try {
-		// 清除任何先前的状态，确保不会使用旧的无效数据
-		webdavServersStore.setState({
-			servers: [],
-			currentServer: null,
-			client: null,
-		})
-
-		// 获取存储的服务器列表
-		const serversString = await getStorage('webdav-servers')
-		let servers: WebDAVServer[] = []
-
-		if (serversString) {
-			try {
-				servers = JSON.parse(serversString)
-				logInfo(`已从存储中加载 ${servers.length} 个WebDAV服务器`)
-			} catch (parseError) {
-				logError('解析WebDAV服务器列表失败:', parseError)
-				// 如果无法解析，使用空数组
-				servers = []
-			}
-		}
-
-		// 初始化状态
-		webdavServersStore.setState({ servers })
-
-		// 如果有服务器，选择第一个作为当前服务器
-		if (servers.length > 0) {
-			try {
-				const defaultServer = servers[0]
-				logInfo('尝试连接到默认WebDAV服务器:', defaultServer.name)
-
-				// 在连接前验证服务器配置
-				if (!defaultServer.url) {
-					throw new Error('服务器URL未定义')
-				}
-
-				const isValid = await verifyWebDAVConnection(defaultServer)
-				if (!isValid) {
-					throw new Error('服务器连接验证失败')
-				}
-
-				// 创建客户端
-				const client = createClient(defaultServer.url, {
-					username: defaultServer.username || '',
-					password: defaultServer.password || '',
-				})
-
-				// 更新状态
-				webdavServersStore.setState({
-					currentServer: defaultServer,
-					client,
-				})
-
-				logInfo('WebDAV初始化完成，默认服务器已连接:', defaultServer.name)
-			} catch (error) {
-				logError('连接默认WebDAV服务器失败:', error)
-				// 初始化失败时重置状态
-				webdavServersStore.setState({
-					currentServer: null,
-					client: null,
-				})
-			}
-		} else {
-			logInfo('没有找到WebDAV服务器配置')
-		}
-	} catch (error) {
-		logError('WebDAV初始化失败:', error)
-		// 重置状态确保应用不会使用无效数据
-		webdavServersStore.setState({
-			servers: [],
-			currentServer: null,
-			client: null,
-		})
 	}
 }
