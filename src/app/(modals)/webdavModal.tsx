@@ -308,15 +308,55 @@ const ServerEditModal = ({ isVisible, onClose, initialServer = null }) => {
 	const handleClose = useCallback(
 		(shouldRefresh = false) => {
 			try {
-				if (isComponentMounted) {
-					onClose(shouldRefresh)
+				if (!isComponentMounted) return
+				setModalVisible(false)
+				if (shouldRefresh) {
+					loadServers()
 				}
 			} catch (error) {
-				logError('关闭服务器编辑模态窗口失败:', error)
+				logError('关闭模态窗口失败:', error)
 			}
 		},
-		[onClose, isComponentMounted],
+		[isComponentMounted, loadServers],
 	)
+
+	const handleGoBack = useCallback(() => {
+		try {
+			if (modalVisible) {
+				// 如果模态窗口打开，先关闭它
+				setModalVisible(false)
+				return
+			}
+
+			// 确保组件仍然挂载
+			if (!isComponentMounted) return
+
+			// 直接尝试返回上一页面
+			router.back()
+
+			// 添加备用导航，如果back()不起作用
+			setTimeout(() => {
+				// 只有在组件仍然挂载的情况下继续
+				if (isComponentMounted) {
+					try {
+						router.replace('/(tabs)')
+					} catch (err) {
+						// 最后的尝试：硬编码返回主页
+						router.replace('/(tabs)/(songs)')
+					}
+				}
+			}, 100)
+		} catch (error) {
+			logError('导航返回失败:', error)
+			// 保险措施 - 尝试直接导航到主屏幕
+			try {
+				router.replace('/(tabs)/(songs)')
+			} catch (innerError) {
+				logError('所有导航方法都失败:', innerError)
+				Alert.alert('提示', '无法返回，请尝试关闭应用')
+			}
+		}
+	}, [isComponentMounted, router, modalVisible])
 
 	if (!isVisible) return null
 
@@ -326,6 +366,7 @@ const ServerEditModal = ({ isVisible, onClose, initialServer = null }) => {
 			transparent={true}
 			animationType="slide"
 			onRequestClose={() => handleClose(false)}
+			statusBarTranslucent={true}
 		>
 			<View style={styles.modalOverlay}>
 				<View style={styles.modalContent}>
@@ -714,21 +755,41 @@ const WebDAVModal = () => {
 
 	const handleGoBack = useCallback(() => {
 		try {
+			if (modalVisible) {
+				// 如果模态窗口打开，先关闭它
+				setModalVisible(false)
+				return
+			}
+
+			// 确保组件仍然挂载
 			if (!isComponentMounted) return
-			// 先关闭模态窗口
-			setModalVisible(false)
-			// 然后执行返回导航
+
+			// 直接尝试返回上一页面
 			router.back()
+
+			// 添加备用导航，如果back()不起作用
+			setTimeout(() => {
+				// 只有在组件仍然挂载的情况下继续
+				if (isComponentMounted) {
+					try {
+						router.replace('/(tabs)')
+					} catch (err) {
+						// 最后的尝试：硬编码返回主页
+						router.replace('/(tabs)/(songs)')
+					}
+				}
+			}, 100)
 		} catch (error) {
 			logError('导航返回失败:', error)
-			// 如果router.back()失败,尝试使用replace
+			// 保险措施 - 尝试直接导航到主屏幕
 			try {
-				router.replace('/(tabs)')
+				router.replace('/(tabs)/(songs)')
 			} catch (innerError) {
-				logError('导航替换失败:', innerError)
+				logError('所有导航方法都失败:', innerError)
+				Alert.alert('提示', '无法返回，请尝试关闭应用')
 			}
 		}
-	}, [isComponentMounted, router])
+	}, [isComponentMounted, router, modalVisible])
 
 	const renderItem = useCallback(
 		({ item }) => {
