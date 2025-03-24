@@ -42,8 +42,7 @@ jobs:
           CODE_SIGNING_IDENTITY="" \
           CODE_SIGN_STYLE=Manual \
           IPHONEOS_DEPLOYMENT_TARGET=15.0 \
-          -target CyMusic \
-          -buildSettings IPHONEOS_DEPLOYMENT_TARGET=15.0
+          -target CyMusic
         
         # 创建IPA包
         mkdir -p Payload
