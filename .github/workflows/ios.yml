@@ -85,11 +85,19 @@ jobs:
             cp -r build/Build/Products/Release-iphoneos/ShareExtension.appex Payload/CyMusic.app/PlugIns/
           fi
           zip -r CyMusic.ipa Payload
+
+          # 确保IPA文件被识别为iOS应用类型
+          echo "设置IPA MIME类型"
+          if [ -f "CyMusic.ipa" ]; then
+            # 添加特殊标记确保GitHub识别为IPA文件
+            echo "application/octet-stream" > CyMusic.ipa.mime
+          fi
           cd ..
 
       - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
-          name: CyMusic.ipa
+          name: CyMusic
           path: ios/CyMusic.ipa
           compression-level: 0 # 禁用压缩
+          content-type: application/octet-stream # 明确指定内容类型为二进制流

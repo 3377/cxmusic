@@ -84,6 +84,7 @@ const ServerEditModal = ({ isVisible, onClose, initialServer = null }) => {
 	const [isDefault, setIsDefault] = useState(false)
 	const [isLoading, setIsLoading] = useState(false)
 	const [isComponentMounted, setIsComponentMounted] = useState(false)
+	const [isTesting, setIsTesting] = useState(false)
 
 	// 组件挂载状态管理
 	useEffect(() => {
@@ -217,6 +218,92 @@ const ServerEditModal = ({ isVisible, onClose, initialServer = null }) => {
 		isComponentMounted,
 	])
 
+	// 新增：测试连接函数
+	const handleTestConnection = useCallback(async () => {
+		if (!isComponentMounted) return
+
+		if (!url.trim()) {
+			Alert.alert('错误', '请输入有效的服务器地址')
+			return
+		}
+
+		try {
+			setIsTesting(true)
+
+			// 清理URL，先移除可能已有的协议前缀
+			let cleanUrl = url.trim()
+			cleanUrl = cleanUrl.replace(/^https?:\/\//i, '')
+
+			// 如果清理后为空
+			if (!cleanUrl) {
+				Alert.alert('错误', '请输入有效的服务器地址')
+				setIsTesting(false)
+				return
+			}
+
+			// 构建完整URL，添加协议
+			const fullUrl = (isHttps ? 'https://' : 'http://') + cleanUrl
+
+			// 创建临时服务器配置对象
+			const testServer = {
+				id: 'test_temp_id',
+				name: name.trim() || '测试服务器',
+				url: fullUrl,
+				username: username.trim(),
+				password: password,
+			}
+
+			// 导入验证函数
+			const { createClient } = await import('webdav')
+
+			// 创建WebDAV客户端配置
+			const clientOptions = {
+				username: testServer.username || '',
+				password: testServer.password || '',
+				maxBodyLength: 1024 * 1024 * 50, // 50MB
+				maxContentLength: 1024 * 1024 * 50, // 50MB
+			}
+
+			// 创建测试客户端
+			const testClient = createClient(testServer.url, clientOptions)
+
+			// 测试连接
+			try {
+				await testClient.getDirectoryContents('/')
+				if (isComponentMounted) {
+					Alert.alert('成功', '服务器连接测试成功！')
+				}
+			} catch (testError) {
+				if (!isComponentMounted) return
+
+				// 添加更具体的错误信息
+				let errorMessage = '服务器连接测试失败'
+
+				if (testError.status === 401) {
+					errorMessage = '授权失败: 请检查用户名和密码'
+				} else if (testError.status === 404) {
+					errorMessage = '服务器路径不存在: 请检查URL路径'
+				} else if (testError.message && testError.message.includes('ENOTFOUND')) {
+					errorMessage = '找不到服务器: 请检查主机名是否正确'
+				} else if (testError.message && testError.message.includes('ECONNREFUSED')) {
+					errorMessage = '连接被拒绝: 服务器可能未运行或端口被阻止'
+				} else if (testError.message && testError.message.includes('certificate')) {
+					errorMessage = 'SSL证书错误: 服务器证书无效或不受信任'
+				}
+
+				Alert.alert('连接失败', `${errorMessage}: ${testError.message || '未知错误'}`)
+			}
+		} catch (error) {
+			if (isComponentMounted) {
+				Alert.alert('错误', `测试连接失败: ${error.message || '未知错误'}`)
+			}
+		} finally {
+			if (isComponentMounted) {
+				setIsTesting(false)
+			}
+		}
+	}, [name, url, isHttps, username, password, isComponentMounted])
+
 	// 安全地关闭模态窗口
 	const handleClose = useCallback(
 		(shouldRefresh = false) => {
@@ -249,95 +336,115 @@ const ServerEditModal = ({ isVisible, onClose, initialServer = null }) => {
 						style={styles.input}
 						value={name}
 						onChangeText={setName}
-						placeholder="例如：我的WebDAV服务器"
-						placeholderTextColor="#999"
+						placeholder="例如: 我的WebDAV服务器"
+						placeholderTextColor="#666"
 					/>
 
-					<Text style={styles.inputLabel}>URL</Text>
-					<View style={styles.urlInputContainer}>
+					<Text style={styles.inputLabel}>服务器地址</Text>
+					<View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 16 }}>
+						{/* 协议选择器 */}
 						<View style={styles.protocolSelector}>
 							<TouchableOpacity
-								style={[styles.protocolButton, isHttps ? styles.protocolButtonActive : null]}
+								style={[styles.protocolOption, isHttps ? styles.protocolOptionSelected : null]}
 								onPress={() => setIsHttps(true)}
 							>
-								<Text
-									style={[
-										styles.protocolButtonText,
-										isHttps ? styles.protocolButtonTextActive : null,
-									]}
-								>
-									HTTPS
+								<Text style={[styles.protocolText, isHttps ? styles.protocolTextSelected : null]}>
+									HTTPS://
 								</Text>
 							</TouchableOpacity>
 							<TouchableOpacity
-								style={[styles.protocolButton, !isHttps ? styles.protocolButtonActive : null]}
+								style={[styles.protocolOption, !isHttps ? styles.protocolOptionSelected : null]}
 								onPress={() => setIsHttps(false)}
 							>
-								<Text
-									style={[
-										styles.protocolButtonText,
-										!isHttps ? styles.protocolButtonTextActive : null,
-									]}
-								>
-									HTTP
+								<Text style={[styles.protocolText, !isHttps ? styles.protocolTextSelected : null]}>
+									HTTP://
 								</Text>
 							</TouchableOpacity>
 						</View>
+
+						{/* URL输入框 */}
 						<TextInput
-							style={styles.urlInput}
+							style={[styles.input, { flex: 1, marginBottom: 0 }]}
 							value={url}
 							onChangeText={setUrl}
-							placeholder="example.com/webdav/"
-							placeholderTextColor="#999"
+							placeholder="example.com/webdav"
+							placeholderTextColor="#666"
 							autoCapitalize="none"
-							keyboardType="url"
 						/>
 					</View>
 
-					<Text style={styles.inputLabel}>用户名</Text>
+					<Text style={styles.inputLabel}>用户名 (可选)</Text>
 					<TextInput
 						style={styles.input}
 						value={username}
 						onChangeText={setUsername}
-						placeholder="用户名"
-						placeholderTextColor="#999"
+						placeholder="WebDAV用户名"
+						placeholderTextColor="#666"
 						autoCapitalize="none"
 					/>
 
-					<Text style={styles.inputLabel}>密码</Text>
+					<Text style={styles.inputLabel}>密码 (可选)</Text>
 					<TextInput
 						style={styles.input}
 						value={password}
 						onChangeText={setPassword}
-						placeholder="密码"
-						placeholderTextColor="#999"
-						secureTextEntry={true}
+						placeholder="WebDAV密码"
+						placeholderTextColor="#666"
+						secureTextEntry
 					/>
 
-					<View style={styles.switchContainer}>
+					<View
+						style={{
+							flexDirection: 'row',
+							alignItems: 'center',
+							marginBottom: 16,
+							justifyContent: 'space-between',
+						}}
+					>
 						<Text style={styles.switchLabel}>设为默认服务器</Text>
-						<Switch value={isDefault} onValueChange={setIsDefault} />
+						<Switch
+							value={isDefault}
+							onValueChange={setIsDefault}
+							trackColor={{ false: '#767577', true: colors.primary }}
+						/>
 					</View>
 
-					<View style={styles.buttonContainer}>
+					{/* 按钮区域 */}
+					<View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+						{/* 测试连接按钮 */}
 						<TouchableOpacity
-							style={[styles.button, styles.cancelButton]}
-							onPress={() => handleClose(false)}
-							disabled={isLoading}
+							style={[styles.button, styles.testButton]}
+							onPress={handleTestConnection}
+							disabled={isTesting || isLoading}
 						>
-							<Text style={styles.buttonText}>取消</Text>
-						</TouchableOpacity>
-						<TouchableOpacity
-							style={[styles.button, styles.saveButton]}
-							onPress={handleSave}
-							disabled={isLoading}
-						>
-							{isLoading ? (
-								<ActivityIndicator size="small" color="#fff" />
+							{isTesting ? (
+								<ActivityIndicator size="small" color="white" />
 							) : (
-								<Text style={styles.buttonText}>保存</Text>
+								<Text style={styles.buttonText}>测试连接</Text>
 							)}
 						</TouchableOpacity>
+
+						<View style={{ flexDirection: 'row' }}>
+							<TouchableOpacity
+								style={[styles.button, styles.cancelButton]}
+								onPress={() => handleClose(false)}
+								disabled={isLoading}
+							>
+								<Text style={styles.buttonText}>取消</Text>
+							</TouchableOpacity>
+
+							<TouchableOpacity
+								style={[styles.button, styles.saveButton, isLoading && styles.buttonDisabled]}
+								onPress={handleSave}
+								disabled={isLoading}
+							>
+								{isLoading ? (
+									<ActivityIndicator size="small" color="white" />
+								) : (
+									<Text style={styles.buttonText}>保存</Text>
+								)}
+							</TouchableOpacity>
+						</View>
 					</View>
 				</View>
 			</View>
@@ -933,25 +1040,26 @@ const styles = StyleSheet.create({
 	},
 	protocolSelector: {
 		flexDirection: 'row',
-		marginBottom: 8,
+		marginRight: 8,
+		borderRadius: 4,
+		borderWidth: 1,
+		borderColor: '#444',
+		overflow: 'hidden',
 	},
-	protocolButton: {
-		paddingVertical: 8,
-		paddingHorizontal: 12,
-		borderRadius: 5,
-		marginRight: 10,
-		backgroundColor: colors.item,
+	protocolOption: {
+		paddingHorizontal: 8,
+		paddingVertical: 6,
+		backgroundColor: '#333',
 	},
-	protocolButtonActive: {
-		backgroundColor: colors.accent,
+	protocolOptionSelected: {
+		backgroundColor: colors.primary,
 	},
-	protocolButtonText: {
-		fontSize: 14,
-		fontWeight: 'bold',
+	protocolText: {
 		color: colors.text,
+		fontSize: 14,
 	},
-	protocolButtonTextActive: {
-		color: '#fff',
+	protocolTextSelected: {
+		color: 'white',
 	},
 	urlInput: {
 		backgroundColor: colors.item,
@@ -1055,6 +1163,15 @@ const styles = StyleSheet.create({
 		height: 1,
 		backgroundColor: colors.border,
 		marginVertical: 10,
+	},
+	testButton: {
+		backgroundColor: '#0066cc',
+		paddingVertical: 10,
+		paddingHorizontal: 16,
+		borderRadius: 6,
+	},
+	buttonDisabled: {
+		backgroundColor: '#ccc',
 	},
 })
 
