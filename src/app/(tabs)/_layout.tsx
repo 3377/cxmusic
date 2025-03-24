@@ -4,38 +4,96 @@ import { logError } from '@/helpers/logger'
 import i18n, { nowLanguage } from '@/utils/i18n'
 import { FontAwesome, Ionicons, MaterialCommunityIcons } from '@expo/vector-icons'
 import { BlurView } from 'expo-blur'
-import { Tabs } from 'expo-router'
-import React, { useCallback } from 'react'
-import { StyleSheet } from 'react-native'
+import { Tabs, router } from 'expo-router'
+import React, { useCallback, useRef, useState } from 'react'
+import { Alert, StyleSheet } from 'react-native'
 
 const TabsNavigation = () => {
 	const language = nowLanguage.useValue()
+	const [hasNavigated, setHasNavigated] = useState(false)
+	const navigationTimerRef = useRef<NodeJS.Timeout | null>(null)
+	const navigationCountRef = useRef(0)
 
-	// 使用useCallback确保函数引用不会频繁变化，提高性能
-	const handleTabPress = useCallback((event) => {
+	// 使用自定义导航函数来处理WebDAV导航
+	const navigateToWebDAV = useCallback(() => {
 		try {
-			// 检查是否是WebDAV标签的点击
-			if (event.target === 'webdav') {
-				// 记录点击事件，不执行额外操作
-				logError('WebDAV标签被点击', { target: event.target })
-
-				// 如果需要，可以在这里取消默认导航并通过替代方式导航
-				// event.preventDefault();
-				// setTimeout(() => router.push('/webdav'), 0);
+			// 防止重复快速导航
+			if (hasNavigated) {
+				return
 			}
+
+			// 增加导航计数，防止过多尝试导致内存问题
+			navigationCountRef.current += 1
+			if (navigationCountRef.current > 3) {
+				logError('WebDAV导航尝试次数过多，已中止')
+				Alert.alert('提示', '无法访问WebDAV，请稍后再试')
+				// 重置计数
+				setTimeout(() => {
+					navigationCountRef.current = 0
+				}, 5000)
+				return
+			}
+
+			setHasNavigated(true)
+
+			// 使用安全的路由方法
+			const navigateWithDelay = () => {
+				try {
+					router.navigate('/(tabs)/webdav')
+				} catch (error) {
+					logError('导航到WebDAV失败:', error)
+				}
+			}
+
+			// 延迟执行导航，给系统一些时间来处理UI状态
+			navigationTimerRef.current = setTimeout(() => {
+				navigateWithDelay()
+
+				// 重置导航状态
+				setTimeout(() => {
+					setHasNavigated(false)
+				}, 1000)
+			}, 50)
 		} catch (error) {
-			// 记录错误但不阻止导航
-			logError('标签点击错误', error)
+			logError('处理WebDAV导航失败:', error)
+			setHasNavigated(false)
+		}
+	}, [hasNavigated])
+
+	// 清理计时器
+	React.useEffect(() => {
+		return () => {
+			if (navigationTimerRef.current) {
+				clearTimeout(navigationTimerRef.current)
+			}
 		}
 	}, [])
 
-	// 使用自定义Tab渲染函数添加额外的安全措施
+	// 处理底部标签栏点击
+	const handleTabPress = useCallback(
+		(event) => {
+			try {
+				// 检查是否是WebDAV标签的点击
+				if (event.target === 'webdav') {
+					// 阻止默认导航行为
+					event.preventDefault()
+
+					// 使用我们自己的导航函数
+					navigateToWebDAV()
+				}
+			} catch (error) {
+				logError('标签点击错误:', error)
+			}
+		},
+		[navigateToWebDAV],
+	)
+
+	// 安全的WebDAV图标渲染函数
 	const renderWebDAVTab = useCallback(({ color }) => {
 		try {
 			return <Ionicons name="cloud-outline" size={24} color={color} />
 		} catch (error) {
-			logError('渲染WebDAV图标失败', error)
-			// 返回一个备用图标
+			logError('渲染WebDAV图标失败:', error)
 			return <Ionicons name="cloud" size={24} color={color} />
 		}
 	}, [])
@@ -61,7 +119,7 @@ const TabsNavigation = () => {
 						<BlurView
 							intensity={90}
 							style={{
-								...StyleSheet.absoluteFillObject, //相当于position: 'absolute', left: 0, right: 0, top: 0, bottom: 0
+								...StyleSheet.absoluteFillObject,
 								overflow: 'hidden',
 								borderTopLeftRadius: 20,
 								borderTopRightRadius: 20,
@@ -95,12 +153,19 @@ const TabsNavigation = () => {
 						title: 'WebDAV',
 						tabBarIcon: renderWebDAVTab,
 					}}
+					// 完全禁用直接点击导航，全部通过我们的自定义导航函数处理
+					listeners={{
+						tabPress: (e) => {
+							e.preventDefault()
+							navigateToWebDAV()
+						},
+					}}
 				/>
 				<Tabs.Screen
 					name="favorites"
 					options={{
 						title: i18n.t('appTab.favorites'),
-						tabBarIcon: ({ color }) => <FontAwesome name="heart" size={20} color={color} />, //当你定义 tabBarIcon 时，React Navigation 会自动传递一些参数给你，其中包括 color、focused 和 size。这些参数会根据当前 Tab 的选中状态和主题来动态变化。
+						tabBarIcon: ({ color }) => <FontAwesome name="heart" size={20} color={color} />,
 					}}
 				/>
 				<Tabs.Screen

@@ -44,20 +44,39 @@ let currentServer: WebDAVServer | null = null
 export async function setupWebDAV() {
 	try {
 		// 从存储中加载服务器列表
-		const savedServers = (await getStorage('webdav-servers')) || []
+		const savedServers =
+			(await getStorage('webdav-servers').catch((err) => {
+				logError('加载WebDAV服务器列表失败:', err)
+				return []
+			})) || []
+
 		if (savedServers && Array.isArray(savedServers)) {
 			webdavServersStore.setValue(savedServers)
 
 			// 如果有默认服务器，则连接到它
-			const defaultServer = savedServers.find((server) => server.isDefault)
-			if (defaultServer) {
-				await connectToServer(defaultServer)
+			try {
+				const defaultServer = savedServers.find((server) => server.isDefault)
+				if (defaultServer) {
+					await connectToServer(defaultServer).catch((err) => {
+						logError('连接默认WebDAV服务器失败:', err)
+					})
+				}
+			} catch (connErr) {
+				logError('查找或连接默认服务器失败:', connErr)
+				// 连接失败不终止初始化过程
 			}
+		} else {
+			// 确保存储值是有效的数组
+			webdavServersStore.setValue([])
 		}
 
 		logInfo('WebDAV服务初始化完成')
 	} catch (error) {
 		logError('WebDAV服务初始化失败:', error)
+		// 初始化失败，设置为安全的默认值
+		webdavServersStore.setValue([])
+		webdavClient = null
+		currentServer = null
 	}
 }
 
@@ -529,19 +548,41 @@ export function getCurrentWebDAVServer() {
  * 钩子函数：获取当前连接的WebDAV服务器
  */
 export function useCurrentWebDAVServer() {
-	const [server, setServer] = useState<WebDAVServer | null>(currentServer)
+	const [server, setServer] = useState<WebDAVServer | null>(null)
 
 	useEffect(() => {
-		const updateServer = () => {
+		// 安全地获取当前服务器状态
+		try {
 			setServer(currentServer)
+		} catch (error) {
+			logError('获取当前WebDAV服务器状态失败:', error)
+			setServer(null)
+		}
+
+		// 创建更新函数
+		const updateServer = () => {
+			try {
+				setServer(currentServer)
+			} catch (error) {
+				logError('更新WebDAV服务器状态失败:', error)
+				setServer(null)
+			}
 		}
 
 		// 添加监听
-		webdavServersStore.subscribe(updateServer)
+		try {
+			webdavServersStore.subscribe(updateServer)
+		} catch (error) {
+			logError('订阅WebDAV服务器状态更新失败:', error)
+		}
 
 		// 清理函数
 		return () => {
-			webdavServersStore.unsubscribe(updateServer)
+			try {
+				webdavServersStore.unsubscribe(updateServer)
+			} catch (error) {
+				logError('取消订阅WebDAV服务器状态更新失败:', error)
+			}
 		}
 	}, [])
 
