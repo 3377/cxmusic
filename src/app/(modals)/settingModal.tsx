@@ -521,7 +521,20 @@ const SettingModal = () => {
 					} else if (item.title === i18n.t('settings.items.currentQuality')) {
 						setIsQualitySelectorVisible(true)
 					} else if (item.title === 'WebDAV服务器管理') {
-						router.push('/(modals)/webdavModal')
+						try {
+							router.push('/(modals)/webdavModal')
+						} catch (error) {
+							logError('导航到WebDAV设置页面失败:', error)
+							// 如果导航失败，尝试使用延迟的方式导航
+							setTimeout(() => {
+								try {
+									router.push('/(modals)/webdavModal')
+								} catch (innerError) {
+									logError('再次尝试导航到WebDAV设置失败:', innerError)
+									showToast('打开WebDAV设置失败，请稍后再试', 'error')
+								}
+							}, 100)
+						}
 					} else if (item.type === 'link') {
 						if (item.title === i18n.t('settings.items.clearPlaylist')) {
 							Alert.alert(

@@ -222,7 +222,17 @@ const WebDAVModal = () => {
 	const [isLoading, setIsLoading] = useState(false)
 	const [modalVisible, setModalVisible] = useState(false)
 	const [selectedServer, setSelectedServer] = useState<WebDAVServer | null>(null)
-	const currentServer = getCurrentWebDAVServer()
+	const [currentServerState, setCurrentServerState] = useState<WebDAVServer | null>(null)
+
+	// 安全地获取当前服务器
+	useEffect(() => {
+		try {
+			const server = getCurrentWebDAVServer()
+			setCurrentServerState(server)
+		} catch (error) {
+			logError('获取当前WebDAV服务器失败:', error)
+		}
+	}, [servers])
 
 	// 全局错误处理
 	const safeAction = async (
@@ -247,8 +257,12 @@ const WebDAVModal = () => {
 	}
 
 	const handleAddServer = () => {
-		setSelectedServer(null)
-		setModalVisible(true)
+		try {
+			setSelectedServer(null)
+			setModalVisible(true)
+		} catch (error) {
+			logError('打开添加服务器模态框失败:', error)
+		}
 	}
 
 	const handleEditServer = (server: WebDAVServer) => {
@@ -309,7 +323,7 @@ const WebDAVModal = () => {
 			onDelete={handleDeleteServer}
 			onSetDefault={handleSetDefaultServer}
 			onTest={handleTestServer}
-			isCurrentServer={currentServer?.id === item.id}
+			isCurrentServer={currentServerState?.id === item.id}
 		/>
 	)
 

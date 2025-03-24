@@ -305,22 +305,32 @@ export function getFileUrl(filePath: string): string {
 
 				// 添加基本认证
 				if (currentServer.username && currentServer.password) {
-					// 使用先编码用户名和密码以避免特殊字符问题
-					const encodedUsername = encodeURIComponent(currentServer.username)
-					const encodedPassword = encodeURIComponent(currentServer.password)
-					url.username = encodedUsername
-					url.password = encodedPassword
-					fullUrl = url.toString()
+					try {
+						// 使用先编码用户名和密码以避免特殊字符问题
+						const encodedUsername = encodeURIComponent(currentServer.username || '')
+						const encodedPassword = encodeURIComponent(currentServer.password || '')
+						url.username = encodedUsername
+						url.password = encodedPassword
+						fullUrl = url.toString()
+					} catch (err) {
+						// 如果无法设置用户名和密码，回退到原始URL
+						logError('设置URL用户名密码失败:', err)
+					}
 				}
 			} catch (e) {
 				// URL解析失败，回退到简单的字符串拼接
 				logError('URL解析失败，使用简单拼接:', e)
 				if (currentServer.username && currentServer.password) {
-					const urlParts = fullUrl.split('://')
-					if (urlParts.length === 2) {
-						const encodedUsername = encodeURIComponent(currentServer.username)
-						const encodedPassword = encodeURIComponent(currentServer.password)
-						fullUrl = `${urlParts[0]}://${encodedUsername}:${encodedPassword}@${urlParts[1]}`
+					try {
+						const urlParts = fullUrl.split('://')
+						if (urlParts.length === 2) {
+							const encodedUsername = encodeURIComponent(currentServer.username || '')
+							const encodedPassword = encodeURIComponent(currentServer.password || '')
+							fullUrl = `${urlParts[0]}://${encodedUsername}:${encodedPassword}@${urlParts[1]}`
+						}
+					} catch (err) {
+						// 如果拼接失败，回退到原始URL
+						logError('拼接URL失败:', err)
 					}
 				}
 			}
@@ -329,7 +339,8 @@ export function getFileUrl(filePath: string): string {
 		return fullUrl
 	} catch (error) {
 		logError('构建WebDAV文件URL失败:', error)
-		throw new Error(`无法创建文件URL: ${error.message}`)
+		// 返回一个安全的默认值，而不是抛出异常
+		return `${currentServer.url || ''}/${filePath || ''}`
 	}
 }
 
@@ -364,19 +375,37 @@ export function webdavFileToMusicItem(file: WebDAVFile): IMusic.IMusicItem {
 		let authHeaders = {}
 		try {
 			if (currentServer.username && currentServer.password) {
-				const authString = `${currentServer.username}:${currentServer.password}`
-				const base64Auth = Buffer.from(authString).toString('base64')
-				authHeaders = {
-					Authorization: `Basic ${base64Auth}`,
+				// 确保用户名和密码非空
+				const username = currentServer.username || ''
+				const password = currentServer.password || ''
+				const authString = `${username}:${password}`
+
+				// 安全地创建base64字符串
+				try {
+					const base64Auth = Buffer.from(authString).toString('base64')
+					authHeaders = {
+						Authorization: `Basic ${base64Auth}`,
+					}
+				} catch (error) {
+					logError('创建base64认证字符串失败:', error)
 				}
 			}
 		} catch (e) {
 			logError('创建认证头失败:', e)
 		}
 
+		// 安全地创建ID
+		let id = ''
+		try {
+			id = `webdav-${currentServer.id}-${file.path}`
+		} catch (e) {
+			id = `webdav-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`
+			logError('创建音乐项ID失败，使用随机ID:', e)
+		}
+
 		// 创建音乐项
 		return {
-			id: `webdav-${currentServer.id}-${file.path}`,
+			id: id,
 			platform: 'webdav',
 			artist: currentServer.name || '未知艺术家', // 使用服务器名称作为艺术家名
 			title: title,
@@ -393,9 +422,9 @@ export function webdavFileToMusicItem(file: WebDAVFile): IMusic.IMusicItem {
 			},
 			// 保存原始文件信息，以便后续处理
 			webdav: {
-				serverId: currentServer.id,
-				serverName: currentServer.name,
-				path: file.path,
+				serverId: currentServer.id || '',
+				serverName: currentServer.name || '',
+				path: file.path || '',
 				size: file.size || 0,
 				mime: file.mime || '',
 			},

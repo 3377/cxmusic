@@ -1,13 +1,45 @@
 import { FloatingPlayer } from '@/components/FloatingPlayer'
 import { colors, fontSize } from '@/constants/tokens'
+import { logError } from '@/helpers/logger'
 import i18n, { nowLanguage } from '@/utils/i18n'
 import { FontAwesome, Ionicons, MaterialCommunityIcons } from '@expo/vector-icons'
 import { BlurView } from 'expo-blur'
 import { Tabs } from 'expo-router'
-import React from 'react'
+import React, { useCallback } from 'react'
 import { StyleSheet } from 'react-native'
+
 const TabsNavigation = () => {
 	const language = nowLanguage.useValue()
+
+	// 使用useCallback确保函数引用不会频繁变化，提高性能
+	const handleTabPress = useCallback((event) => {
+		try {
+			// 检查是否是WebDAV标签的点击
+			if (event.target === 'webdav') {
+				// 记录点击事件，不执行额外操作
+				logError('WebDAV标签被点击', { target: event.target })
+
+				// 如果需要，可以在这里取消默认导航并通过替代方式导航
+				// event.preventDefault();
+				// setTimeout(() => router.push('/webdav'), 0);
+			}
+		} catch (error) {
+			// 记录错误但不阻止导航
+			logError('标签点击错误', error)
+		}
+	}, [])
+
+	// 使用自定义Tab渲染函数添加额外的安全措施
+	const renderWebDAVTab = useCallback(({ color }) => {
+		try {
+			return <Ionicons name="cloud-outline" size={24} color={color} />
+		} catch (error) {
+			logError('渲染WebDAV图标失败', error)
+			// 返回一个备用图标
+			return <Ionicons name="cloud" size={24} color={color} />
+		}
+	}, [])
+
 	return (
 		<>
 			<Tabs
@@ -37,6 +69,9 @@ const TabsNavigation = () => {
 						/>
 					),
 				}}
+				screenListeners={{
+					tabPress: handleTabPress,
+				}}
 			>
 				<Tabs.Screen
 					name="(songs)"
@@ -58,7 +93,7 @@ const TabsNavigation = () => {
 					name="webdav"
 					options={{
 						title: 'WebDAV',
-						tabBarIcon: ({ color }) => <Ionicons name="cloud-outline" size={24} color={color} />,
+						tabBarIcon: renderWebDAVTab,
 					}}
 				/>
 				<Tabs.Screen

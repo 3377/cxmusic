@@ -295,7 +295,23 @@ const WebDAVScreen = () => {
 					<Text style={styles.noServerText}>未连接到WebDAV服务器</Text>
 					<TouchableOpacity
 						style={styles.connectButton}
-						onPress={() => router.push('/(modals)/webdavModal')}
+						onPress={() => {
+							try {
+								router.push('/(modals)/webdavModal')
+							} catch (error) {
+								logError('导航到WebDAV设置页面失败:', error)
+								// 如果导航失败，尝试使用延迟的方式导航
+								setTimeout(() => {
+									try {
+										router.push('/(modals)/webdavModal')
+									} catch (innerError) {
+										logError('再次尝试导航到WebDAV设置失败:', innerError)
+										// 可以在这里添加一个用户提示
+										Alert.alert('错误', '无法导航到WebDAV设置页面，请稍后再试')
+									}
+								}, 100)
+							}
+						}}
 					>
 						<Text style={styles.connectButtonText}>添加/管理服务器</Text>
 					</TouchableOpacity>
