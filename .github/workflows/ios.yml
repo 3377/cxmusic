@@ -1,0 +1,46 @@
+name: Build iOS IPA
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: macos-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+        cache: 'yarn'
+    
+    - name: Install dependencies
+      run: yarn install
+    
+    - name: Install iOS dependencies
+      run: |
+        cd ios
+        pod install
+        cd ..
+    
+    - name: Build iOS app
+      run: |
+        cd ios
+        xcodebuild -workspace CyMusic.xcworkspace -scheme CyMusic -configuration Release -sdk iphoneos -derivedDataPath build -allowProvisioningUpdates
+        
+        # Create IPA
+        mkdir -p Payload
+        cp -r build/Build/Products/Release-iphoneos/CyMusic.app Payload/
+        zip -r CyMusic.ipa Payload
+        cd ..
+    
+    - name: Upload IPA
+      uses: actions/upload-artifact@v4
+      with:
+        name: CyMusic.ipa
+        path: ios/CyMusic.ipa 
