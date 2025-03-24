@@ -43,6 +43,10 @@ let currentServer: WebDAVServer | null = null
  */
 export async function setupWebDAV() {
 	try {
+		// 确保webdavClient初始状态为null
+		webdavClient = null
+		currentServer = null
+
 		// 从存储中加载服务器列表
 		const savedServers =
 			(await getStorage('webdav-servers').catch((err) => {
@@ -51,19 +55,38 @@ export async function setupWebDAV() {
 			})) || []
 
 		if (savedServers && Array.isArray(savedServers)) {
-			webdavServersStore.setValue(savedServers)
+			// 安全地设置服务器列表
+			try {
+				webdavServersStore.setValue(savedServers)
+			} catch (err) {
+				logError('设置WebDAV服务器列表失败:', err)
+				webdavServersStore.setValue([])
+			}
 
 			// 如果有默认服务器，则连接到它
 			try {
 				const defaultServer = savedServers.find((server) => server.isDefault)
 				if (defaultServer) {
-					await connectToServer(defaultServer).catch((err) => {
-						logError('连接默认WebDAV服务器失败:', err)
-					})
+					// 防止此处连接失败影响整个初始化过程
+					try {
+						await connectToServer(defaultServer).catch((err) => {
+							logError('连接默认WebDAV服务器失败:', err)
+							// 连接失败时确保客户端状态正确
+							webdavClient = null
+							currentServer = null
+						})
+					} catch (connErr) {
+						logError('连接默认服务器时发生异常:', connErr)
+						// 确保客户端状态正确
+						webdavClient = null
+						currentServer = null
+					}
 				}
 			} catch (connErr) {
 				logError('查找或连接默认服务器失败:', connErr)
-				// 连接失败不终止初始化过程
+				// 连接失败不终止初始化过程，但确保状态正确
+				webdavClient = null
+				currentServer = null
 			}
 		} else {
 			// 确保存储值是有效的数组
@@ -74,7 +97,11 @@ export async function setupWebDAV() {
 	} catch (error) {
 		logError('WebDAV服务初始化失败:', error)
 		// 初始化失败，设置为安全的默认值
-		webdavServersStore.setValue([])
+		try {
+			webdavServersStore.setValue([])
+		} catch (e) {
+			logError('重置WebDAV服务器列表失败:', e)
+		}
 		webdavClient = null
 		currentServer = null
 	}
@@ -85,17 +112,52 @@ export async function setupWebDAV() {
  * @param server WebDAV服务器配置
  */
 export async function connectToServer(server: WebDAVServer): Promise<boolean> {
-	try {
-		webdavClient = createClient(server.url, {
-			authType: AuthType.Password,
-			username: server.username,
-			password: server.password,
-		})
+	// 首先重置客户端状态
+	webdavClient = null
+	currentServer = null
 
-		// 测试连接
-		const isConnected = await webdavClient.exists('/')
+	if (!server || !server.url) {
+		logError('无效的WebDAV服务器配置')
+		return false
+	}
+
+	try {
+		// 尝试创建WebDAV客户端
+		try {
+			webdavClient = createClient(server.url, {
+				authType: AuthType.Password,
+				username: server.username || '',
+				password: server.password || '',
+			})
+		} catch (error) {
+			logError(`创建WebDAV客户端失败: ${server.name}`, error)
+			webdavClient = null
+			return false
+		}
+
+		if (!webdavClient) {
+			logError(`WebDAV客户端创建失败: ${server.name}`)
+			return false
+		}
+
+		// 测试连接，使用更安全的尝试方式
+		let isConnected = false
+		try {
+			// 设置超时，防止长时间卡死
+			const connectPromise = webdavClient.exists('/')
+			const timeoutPromise = new Promise((_, reject) =>
+				setTimeout(() => reject(new Error('连接超时')), 10000),
+			)
+
+			isConnected = (await Promise.race([connectPromise, timeoutPromise])) as boolean
+		} catch (error) {
+			logError(`WebDAV连接测试失败: ${server.name}`, error)
+			webdavClient = null
+			return false
+		}
+
 		if (isConnected) {
-			currentServer = server
+			currentServer = { ...server } // 使用深拷贝防止引用问题
 			logInfo(`已连接到WebDAV服务器: ${server.name}`)
 			return true
 		} else {
@@ -105,6 +167,7 @@ export async function connectToServer(server: WebDAVServer): Promise<boolean> {
 		}
 	} catch (error) {
 		webdavClient = null
+		currentServer = null
 		logError(`连接到WebDAV服务器失败: ${server.name}`, error)
 		return false
 	}
@@ -551,21 +614,31 @@ export function useCurrentWebDAVServer() {
 	const [server, setServer] = useState<WebDAVServer | null>(null)
 
 	useEffect(() => {
+		let isMounted = true
+
 		// 安全地获取当前服务器状态
 		try {
-			setServer(currentServer)
+			if (isMounted) {
+				setServer(currentServer ? { ...currentServer } : null)
+			}
 		} catch (error) {
 			logError('获取当前WebDAV服务器状态失败:', error)
-			setServer(null)
+			if (isMounted) {
+				setServer(null)
+			}
 		}
 
 		// 创建更新函数
 		const updateServer = () => {
 			try {
-				setServer(currentServer)
+				if (isMounted) {
+					setServer(currentServer ? { ...currentServer } : null)
+				}
 			} catch (error) {
 				logError('更新WebDAV服务器状态失败:', error)
-				setServer(null)
+				if (isMounted) {
+					setServer(null)
+				}
 			}
 		}
 
@@ -578,6 +651,7 @@ export function useCurrentWebDAVServer() {
 
 		// 清理函数
 		return () => {
+			isMounted = false
 			try {
 				webdavServersStore.unsubscribe(updateServer)
 			} catch (error) {

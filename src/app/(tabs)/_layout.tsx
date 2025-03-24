@@ -1,73 +1,122 @@
 import { FloatingPlayer } from '@/components/FloatingPlayer'
 import { colors, fontSize } from '@/constants/tokens'
-import { logError } from '@/helpers/logger'
+import { logError, logInfo } from '@/helpers/logger'
 import i18n, { nowLanguage } from '@/utils/i18n'
 import { FontAwesome, Ionicons, MaterialCommunityIcons } from '@expo/vector-icons'
 import { BlurView } from 'expo-blur'
 import { Tabs, router } from 'expo-router'
-import React, { useCallback, useRef, useState } from 'react'
-import { Alert, StyleSheet } from 'react-native'
+import React, { useCallback, useEffect, useRef, useState } from 'react'
+import { Alert, StyleSheet, Text, View } from 'react-native'
 
 const TabsNavigation = () => {
 	const language = nowLanguage.useValue()
 	const [hasNavigated, setHasNavigated] = useState(false)
 	const navigationTimerRef = useRef<NodeJS.Timeout | null>(null)
 	const navigationCountRef = useRef(0)
+	const debounceTimerRef = useRef<NodeJS.Timeout | null>(null)
+	const [isNavigating, setIsNavigating] = useState(false)
+	const isInitialRenderRef = useRef(true)
 
-	// 使用自定义导航函数来处理WebDAV导航
+	// 初始渲染时清除可能的导航状态
+	useEffect(() => {
+		if (isInitialRenderRef.current) {
+			isInitialRenderRef.current = false
+			// 重置所有导航状态
+			navigationCountRef.current = 0
+			setHasNavigated(false)
+			setIsNavigating(false)
+		}
+
+		// 组件卸载时清理所有计时器
+		return () => {
+			if (navigationTimerRef.current) {
+				clearTimeout(navigationTimerRef.current)
+				navigationTimerRef.current = null
+			}
+			if (debounceTimerRef.current) {
+				clearTimeout(debounceTimerRef.current)
+				debounceTimerRef.current = null
+			}
+			// 重置导航状态
+			navigationCountRef.current = 0
+		}
+	}, [])
+
+	// 使用防抖技术来处理WebDAV导航
 	const navigateToWebDAV = useCallback(() => {
 		try {
-			// 防止重复快速导航
-			if (hasNavigated) {
+			// 阻止重叠导航请求
+			if (isNavigating || hasNavigated) {
+				logInfo('已有WebDAV导航请求正在处理中，忽略新请求')
 				return
 			}
 
-			// 增加导航计数，防止过多尝试导致内存问题
-			navigationCountRef.current += 1
-			if (navigationCountRef.current > 3) {
+			// 阻止过多的导航尝试
+			if (navigationCountRef.current > 2) {
 				logError('WebDAV导航尝试次数过多，已中止')
 				Alert.alert('提示', '无法访问WebDAV，请稍后再试')
-				// 重置计数
+
+				// 5秒后重置计数
 				setTimeout(() => {
 					navigationCountRef.current = 0
+					setIsNavigating(false)
+					setHasNavigated(false)
 				}, 5000)
 				return
 			}
 
-			setHasNavigated(true)
+			// 设置导航状态
+			setIsNavigating(true)
 
-			// 使用安全的路由方法
-			const navigateWithDelay = () => {
-				try {
-					router.navigate('/(tabs)/webdav')
-				} catch (error) {
-					logError('导航到WebDAV失败:', error)
-				}
+			// 清除任何已有的导航定时器
+			if (debounceTimerRef.current) {
+				clearTimeout(debounceTimerRef.current)
 			}
 
-			// 延迟执行导航，给系统一些时间来处理UI状态
-			navigationTimerRef.current = setTimeout(() => {
-				navigateWithDelay()
+			// 使用防抖动技术防止快速点击
+			debounceTimerRef.current = setTimeout(() => {
+				// 标记已经开始导航流程
+				setHasNavigated(true)
+				navigationCountRef.current += 1
 
-				// 重置导航状态
-				setTimeout(() => {
-					setHasNavigated(false)
-				}, 1000)
-			}, 50)
+				// 安全版的导航函数
+				const safeNavigate = () => {
+					try {
+						// 使用稍微延迟的导航以允许UI更新
+						setTimeout(() => {
+							try {
+								router.navigate('/(tabs)/webdav')
+
+								// 导航成功后，设置恢复计时器
+								setTimeout(() => {
+									setIsNavigating(false)
+									setHasNavigated(false)
+								}, 1000)
+							} catch (navError) {
+								logError('WebDAV导航执行失败:', navError)
+								// 恢复状态
+								setIsNavigating(false)
+								setHasNavigated(false)
+							}
+						}, 100)
+					} catch (error) {
+						logError('安全导航函数执行失败:', error)
+						// 恢复状态
+						setIsNavigating(false)
+						setHasNavigated(false)
+					}
+				}
+
+				// 执行导航逻辑
+				safeNavigate()
+			}, 300) // 300ms防抖延迟
 		} catch (error) {
-			logError('处理WebDAV导航失败:', error)
+			logError('WebDAV导航处理失败:', error)
+			// 恢复状态
+			setIsNavigating(false)
 			setHasNavigated(false)
 		}
-	}, [hasNavigated])
-
-	// 清理计时器
-	React.useEffect(() => {
-		return () => {
-			if (navigationTimerRef.current) {
-				clearTimeout(navigationTimerRef.current)
-			}
-		}
-	}, [])
+	}, [hasNavigated, isNavigating])
 
 	// 处理底部标签栏点击
 	const handleTabPress = useCallback(
@@ -94,9 +143,18 @@ const TabsNavigation = () => {
 			return <Ionicons name="cloud-outline" size={24} color={color} />
 		} catch (error) {
 			logError('渲染WebDAV图标失败:', error)
-			return <Ionicons name="cloud" size={24} color={color} />
+			return <Ionicons name="alert-circle" size={24} color="red" />
 		}
 	}, [])
+
+	// 如果发生错误，提供回退UI
+	if (navigationCountRef.current > 5) {
+		return (
+			<View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
+				<Text>导航组件发生错误，请重启应用</Text>
+			</View>
+		)
+	}
 
 	return (
 		<>

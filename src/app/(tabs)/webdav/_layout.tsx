@@ -1,7 +1,5 @@
-import { StackScreenWithSearchBar } from '@/constants/layout'
 import { colors } from '@/constants/tokens'
 import { logError } from '@/helpers/logger'
-import { defaultStyles } from '@/styles'
 import { nowLanguage } from '@/utils/i18n'
 import { Ionicons } from '@expo/vector-icons'
 import { Stack, useRouter } from 'expo-router'
@@ -10,34 +8,48 @@ import { Alert, Text, TouchableOpacity, View } from 'react-native'
 
 // 错误边界组件
 class ErrorBoundary extends React.Component {
-	state = { hasError: false, errorInfo: '' }
+	state = { hasError: false, errorCount: 0 }
 
-	static getDerivedStateFromError(error) {
+	static getDerivedStateFromError() {
 		return { hasError: true }
 	}
 
-	componentDidCatch(error, errorInfo) {
-		logError('WebDAV视图错误:', error, errorInfo)
-		this.setState({ errorInfo: error.toString() })
+	componentDidCatch(error, info) {
+		logError('WebDAV页面错误:', error, info)
+		this.setState((prevState) => ({
+			errorCount: prevState.errorCount + 1,
+		}))
+	}
+
+	retry = () => {
+		this.setState({ hasError: false })
 	}
 
 	render() {
 		if (this.state.hasError) {
+			// 错误次数过多，返回到歌曲列表页面
+			if (this.state.errorCount > 3) {
+				return <Redirect href="/(tabs)/(songs)" />
+			}
+
 			return (
-				<View style={[defaultStyles.container, { justifyContent: 'center', alignItems: 'center' }]}>
-					<Text style={{ fontSize: 18, marginBottom: 20, textAlign: 'center' }}>
-						加载WebDAV视图时出错
+				<View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', padding: 20 }}>
+					<Text style={{ fontSize: 18, fontWeight: 'bold', marginBottom: 15 }}>
+						抱歉，WebDAV页面加载失败
+					</Text>
+					<Text style={{ fontSize: 14, marginBottom: 20, textAlign: 'center' }}>
+						这可能是由于网络连接问题或WebDAV服务器配置不正确导致的
 					</Text>
 					<TouchableOpacity
 						style={{
 							backgroundColor: colors.primary,
 							paddingHorizontal: 20,
 							paddingVertical: 10,
-							borderRadius: 5,
+							borderRadius: 20,
 						}}
-						onPress={() => this.setState({ hasError: false })}
+						onPress={this.retry}
 					>
-						<Text style={{ color: '#fff' }}>重试</Text>
+						<Text style={{ color: '#fff', fontWeight: 'bold' }}>重试</Text>
 					</TouchableOpacity>
 				</View>
 			)
@@ -64,57 +76,105 @@ const SafeHeaderRight = ({ onPress }) => {
 const WebDAVScreenLayout = () => {
 	const language = nowLanguage.useValue()
 	const router = useRouter()
-	const [isRouterReady, setIsRouterReady] = useState(false)
+	const [isReady, setIsReady] = useState(false)
+	const [loadFailed, setLoadFailed] = useState(false)
 
-	// 组件挂载后延迟设置路由器状态
+	// 初始化
 	useEffect(() => {
+		// 标记组件挂载状态
+		let isMounted = true
+
+		// 延迟初始化以等待系统稳定
 		const timer = setTimeout(() => {
-			setIsRouterReady(true)
+			if (isMounted) {
+				setIsReady(true)
+			}
 		}, 300)
-		return () => clearTimeout(timer)
+
+		return () => {
+			isMounted = false
+			clearTimeout(timer)
+		}
 	}, [])
 
-	const handleSettingsPress = useCallback(() => {
-		if (!isRouterReady) {
-			logError('路由器未就绪，无法导航')
-			Alert.alert('提示', '应用正在加载中，请稍后再试')
-			return
-		}
-
+	// 安全导航到设置
+	const safeNavigateToSettings = useCallback(() => {
 		try {
+			// 使用防抖动来确保不重复导航
 			router.push('/(modals)/webdavModal')
 		} catch (error) {
 			logError('导航到WebDAV设置失败:', error)
-			// 如果导航失败，尝试使用延迟的方式导航
-			setTimeout(() => {
-				try {
-					router.push('/(modals)/webdavModal')
-				} catch (innerError) {
-					logError('再次尝试导航到WebDAV设置失败:', innerError)
-					Alert.alert('提示', '无法打开设置页面，请稍后再试')
-				}
-			}, 300)
+			// 尝试弹出提示
+			try {
+				Alert.alert('错误', '无法打开WebDAV设置，请稍后再试')
+			} catch (alertError) {
+				logError('显示WebDAV设置导航错误提示失败:', alertError)
+			}
 		}
-	}, [router, isRouterReady])
+	}, [router])
+
+	// 显示加载状态
+	if (!isReady) {
+		return (
+			<View
+				style={{
+					flex: 1,
+					justifyContent: 'center',
+					alignItems: 'center',
+					backgroundColor: colors.background,
+				}}
+			>
+				<ActivityIndicator size="large" color={colors.primary} />
+				<Text style={{ marginTop: 15, color: colors.text }}>正在准备WebDAV...</Text>
+			</View>
+		)
+	}
+
+	// 如果加载失败，显示错误
+	if (loadFailed) {
+		return (
+			<View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', padding: 20 }}>
+				<Text style={{ fontSize: 18, fontWeight: 'bold', marginBottom: 15 }}>
+					WebDAV页面加载失败
+				</Text>
+				<TouchableOpacity
+					style={{
+						backgroundColor: colors.primary,
+						paddingHorizontal: 20,
+						paddingVertical: 10,
+						borderRadius: 20,
+						marginTop: 10,
+					}}
+					onPress={() => setLoadFailed(false)}
+				>
+					<Text style={{ color: '#fff', fontWeight: 'bold' }}>重试</Text>
+				</TouchableOpacity>
+			</View>
+		)
+	}
 
 	return (
 		<ErrorBoundary>
-			<View style={defaultStyles.container}>
-				<Stack>
-					<Stack.Screen
-						name="index"
-						options={{
-							...StackScreenWithSearchBar,
-							headerTitle: 'WebDAV',
-							headerStyle: {
-								backgroundColor: colors.background,
-							},
-							headerTintColor: colors.primary,
-							headerRight: () => <SafeHeaderRight onPress={handleSettingsPress} />,
-						}}
-					/>
-				</Stack>
-			</View>
+			<Stack
+				screenOptions={{
+					headerStyle: {
+						backgroundColor: colors.background,
+					},
+					headerTintColor: colors.text,
+					headerTitleStyle: {
+						fontWeight: 'bold',
+					},
+					headerRight: () => <SafeHeaderRight onPress={safeNavigateToSettings} />,
+				}}
+			>
+				<Stack.Screen
+					name="index"
+					options={{
+						title: 'WebDAV',
+						animation: 'fade',
+					}}
+				/>
+			</Stack>
 		</ErrorBoundary>
 	)
 }

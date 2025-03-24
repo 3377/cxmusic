@@ -1,22 +1,19 @@
 import { colors } from '@/constants/tokens'
 import { logError } from '@/helpers/logger'
-import myTrackPlayer from '@/helpers/trackPlayerIndex'
 import {
 	WebDAVFile,
-	getAllMusicFiles,
 	getDirectoryContents,
 	useCurrentWebDAVServer,
 	webdavFileToMusicItem,
-	webdavFilesToMusicItems,
 } from '@/helpers/webdavService'
-import { showToast } from '@/utils/utils'
 import { Ionicons } from '@expo/vector-icons'
 import { useRouter } from 'expo-router'
-import React, { Suspense, lazy, useCallback, useEffect, useState } from 'react'
+import React, { lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
 	ActivityIndicator,
 	Alert,
 	FlatList,
+	InteractionManager,
 	StyleSheet,
 	Text,
 	TouchableOpacity,
@@ -25,22 +22,24 @@ import {
 
 // 错误捕获组件
 class ErrorCatcher extends React.Component {
-	state = { hasError: false }
+	state = { hasError: false, errorInfo: null }
 
 	static getDerivedStateFromError() {
 		return { hasError: true }
 	}
 
-	componentDidCatch(error, info) {
-		logError('WebDAV页面渲染错误:', error, info)
+	componentDidCatch(error, errorInfo) {
+		logError('WebDAV错误:', error, errorInfo)
+		this.setState({ errorInfo: errorInfo })
 	}
 
 	render() {
 		if (this.state.hasError) {
 			return (
 				<View style={styles.errorContainer}>
-					<Ionicons name="warning" size={50} color="#FF6B6B" />
-					<Text style={styles.errorText}>加载WebDAV内容时出错</Text>
+					<Ionicons name="cloud-offline" size={60} color={colors.subtext} />
+					<Text style={styles.errorText}>WebDAV组件加载失败</Text>
+					<Text style={styles.errorSubtext}>请检查您的网络连接和WebDAV服务器设置</Text>
 					<TouchableOpacity
 						style={styles.retryButton}
 						onPress={() => this.setState({ hasError: false })}
@@ -58,7 +57,7 @@ class ErrorCatcher extends React.Component {
 // 加载占位符
 const LoadingPlaceholder = () => (
 	<View style={styles.loadingContainer}>
-		<ActivityIndicator size="large" color={colors.accent} />
+		<ActivityIndicator size="large" color={colors.primary} />
 		<Text style={styles.loadingText}>加载中...</Text>
 	</View>
 )
@@ -69,58 +68,51 @@ const LazyFileItem = lazy(() => Promise.resolve().then(() => ({ default: FileIte
 const LazyFileActions = lazy(() => Promise.resolve().then(() => ({ default: FileActions })))
 
 // 文件项组件
-const FileItem = ({ file, onPress, onLongPress }) => {
-	if (!file) {
-		return null
+const FileItem = React.memo(({ file, onPress, onLongPress }) => {
+	const isDirectory = file.type === 'directory'
+	const isMusic =
+		file.mime?.startsWith('audio/') || /\.(mp3|flac|wav|ogg|m4a|aac)$/i.test(file.basename || '')
+
+	// 格式化文件大小显示
+	const formatFileSize = (size: number) => {
+		if (size < 1024) return `${size} B`
+		if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`
+		return `${(size / (1024 * 1024)).toFixed(1)} MB`
 	}
 
-	try {
-		const isDirectory = file.type === 'directory'
-		const isMusic =
-			file.type === 'file' &&
-			(file.mime?.startsWith('audio/') ||
-				/\.(mp3|flac|wav|ogg|m4a|aac)$/i.test(file.basename || ''))
+	// 安全地获取文件修改日期
+	const getModifiedDate = () => {
+		try {
+			return new Date(file.lastmod).toLocaleDateString()
+		} catch (e) {
+			return '未知日期'
+		}
+	}
 
-		return (
-			<TouchableOpacity
-				style={styles.fileItem}
-				onPress={() => onPress(file)}
-				onLongPress={() => onLongPress(file)}
-			>
-				<View style={styles.fileIcon}>
-					<Ionicons
-						name={isDirectory ? 'folder' : isMusic ? 'musical-note' : 'document'}
-						size={24}
-						color={isDirectory ? '#FFD700' : isMusic ? '#1DB954' : '#999'}
-					/>
-				</View>
-				<View style={styles.fileInfo}>
-					<Text style={styles.fileName} numberOfLines={1}>
-						{file.basename || '未知文件名'}
-					</Text>
-					<Text style={styles.fileDetails}>
-						{isDirectory
-							? '文件夹'
-							: `${((file.size || 0) / (1024 * 1024)).toFixed(2)} MB • ${new Date(file.lastmod || Date.now()).toLocaleDateString()}`}
-					</Text>
-				</View>
-				{isDirectory && <Ionicons name="chevron-forward" size={20} color="#999" />}
-			</TouchableOpacity>
-		)
-	} catch (error) {
-		logError('渲染文件项失败:', error, file)
-		return (
-			<View style={styles.fileItem}>
-				<View style={styles.fileIcon}>
-					<Ionicons name="alert-circle" size={24} color="#FF6B6B" />
-				</View>
-				<View style={styles.fileInfo}>
-					<Text style={styles.fileName}>无法显示此项</Text>
-				</View>
+	return (
+		<TouchableOpacity
+			style={styles.fileItem}
+			onPress={() => onPress(file)}
+			onLongPress={() => onLongPress(file)}
+		>
+			<View style={styles.fileIcon}>
+				<Ionicons
+					name={isDirectory ? 'folder' : isMusic ? 'musical-note' : 'document'}
+					size={24}
+					color={isDirectory ? '#FFA000' : isMusic ? colors.primary : '#607D8B'}
+				/>
 			</View>
-		)
-	}
-}
+			<View style={styles.fileInfo}>
+				<Text style={styles.fileName} numberOfLines={1}>
+					{file.basename}
+				</Text>
+				<Text style={styles.fileDetails}>
+					{isDirectory ? '文件夹' : `${formatFileSize(file.size)} · ${getModifiedDate()}`}
+				</Text>
+			</View>
+		</TouchableOpacity>
+	)
+})
 
 // 文件操作菜单
 const FileActions = ({ file, onPlay, onAddToQueue, onClose, visible }) => {
@@ -188,6 +180,7 @@ const FileActions = ({ file, onPlay, onAddToQueue, onClose, visible }) => {
 const WebDAVScreen = () => {
 	const router = useRouter()
 	const currentServer = useCurrentWebDAVServer()
+	const { addToPlaylist, playTrack } = usePlayer()
 	const [isLoading, setIsLoading] = useState(false)
 	const [loadError, setLoadError] = useState(null)
 	const [currentPath, setCurrentPath] = useState('/')
@@ -196,10 +189,26 @@ const WebDAVScreen = () => {
 	const [selectedFile, setSelectedFile] = useState<WebDAVFile | null>(null)
 	const [showActions, setShowActions] = useState(false)
 	const [isComponentMounted, setIsComponentMounted] = useState(false)
+	const loadAttempts = useRef(0)
+	const isFirstLoadRef = useRef(true)
 
 	// 使用useEffect标记组件已挂载，防止内存泄漏
 	useEffect(() => {
 		setIsComponentMounted(true)
+
+		// 使用InteractionManager确保UI交互完成后再尝试加载内容
+		if (isFirstLoadRef.current) {
+			isFirstLoadRef.current = false
+			InteractionManager.runAfterInteractions(() => {
+				// 延迟300ms加载数据以确保UI稳定
+				setTimeout(() => {
+					if (currentServer) {
+						loadDirectoryContents('/')
+					}
+				}, 300)
+			})
+		}
+
 		return () => {
 			setIsComponentMounted(false)
 		}
@@ -207,7 +216,7 @@ const WebDAVScreen = () => {
 
 	// 加载当前目录内容
 	const loadDirectoryContents = useCallback(
-		async (path: string = '/') => {
+		async (path: string = '/', shouldResetHistory = false) => {
 			if (!currentServer || !isComponentMounted) {
 				return
 			}
@@ -215,6 +224,21 @@ const WebDAVScreen = () => {
 			try {
 				setLoadError(null)
 				setIsLoading(true)
+
+				// 增加加载尝试次数
+				loadAttempts.current += 1
+
+				// 如果尝试次数过多，延迟后再尝试
+				if (loadAttempts.current > 3) {
+					Alert.alert('提示', '加载次数过多，请稍后再试')
+					setTimeout(() => {
+						loadAttempts.current = 0
+					}, 5000)
+					setIsLoading(false)
+					return
+				}
+
+				// 安全地获取目录内容
 				const contents = await getDirectoryContents(path).catch((err) => {
 					throw err
 				})
@@ -223,6 +247,14 @@ const WebDAVScreen = () => {
 				if (isComponentMounted) {
 					setFiles(contents || [])
 					setCurrentPath(path)
+
+					// 如果需要重置历史记录
+					if (shouldResetHistory) {
+						setPathHistory([])
+					}
+
+					// 重置尝试计数
+					loadAttempts.current = 0
 				}
 			} catch (error) {
 				logError(`加载目录内容失败 (${path}):`, error)
@@ -242,10 +274,11 @@ const WebDAVScreen = () => {
 	// 初始化和服务器变更时加载根目录
 	useEffect(() => {
 		if (currentServer && isComponentMounted) {
-			loadDirectoryContents('/')
-			setPathHistory([])
+			loadDirectoryContents('/', true)
 		} else if (isComponentMounted) {
 			setFiles([])
+			setCurrentPath('/')
+			setPathHistory([])
 		}
 	}, [currentServer, isComponentMounted, loadDirectoryContents])
 
@@ -287,13 +320,17 @@ const WebDAVScreen = () => {
 				}
 			} catch (error) {
 				logError('处理文件点击失败:', error)
+				Alert.alert('提示', '无法处理此文件')
 			}
 		},
 		[currentPath, isComponentMounted, loadDirectoryContents],
 	)
 
 	// 包装安全的文件处理函数
-	const safeHandleFilePress = createSafeHandler(handleFilePress)
+	const safeHandleFilePress = useMemo(
+		() => createSafeHandler(handleFilePress),
+		[createSafeHandler, handleFilePress],
+	)
 
 	// 处理文件长按
 	const handleFileLongPress = useCallback(
@@ -311,139 +348,73 @@ const WebDAVScreen = () => {
 	)
 
 	// 包装安全的长按处理函数
-	const safeHandleFileLongPress = createSafeHandler(handleFileLongPress)
-
-	// 播放音乐文件
-	const handlePlayFile = useCallback(
-		async (file: WebDAVFile) => {
-			if (!file || !isComponentMounted) return
-
-			try {
-				if (!file || !file.path) {
-					showToast('无效文件', 'error')
-					return
-				}
-
-				setIsLoading(true)
-				const musicItem = webdavFileToMusicItem(file)
-
-				if (!musicItem.url) {
-					showToast('文件URL无效', 'error')
-					return
-				}
-
-				await myTrackPlayer.play(musicItem)
-				showToast(`正在播放: ${file.basename || '未知文件'}`, 'success')
-			} catch (error) {
-				logError('播放文件失败:', error)
-				Alert.alert('错误', `无法播放文件: ${error.message || '未知错误'}`)
-			} finally {
-				if (isComponentMounted) {
-					setIsLoading(false)
-				}
-			}
-		},
-		[isComponentMounted],
+	const safeHandleFileLongPress = useMemo(
+		() => createSafeHandler(handleFileLongPress),
+		[createSafeHandler, handleFileLongPress],
 	)
 
-	// 添加到播放队列
-	const handleAddToQueue = useCallback(
-		async (file: WebDAVFile) => {
-			if (!file || !isComponentMounted) return
-
-			try {
-				if (!file || !file.path) {
-					showToast('无效文件', 'error')
-					return
-				}
-
-				setIsLoading(true)
-				const musicItem = webdavFileToMusicItem(file)
-
-				if (!musicItem.url) {
-					showToast('文件URL无效', 'error')
-					return
-				}
-
-				await myTrackPlayer.add(musicItem)
-				showToast(`已添加到队列: ${file.basename || '未知文件'}`, 'success')
-			} catch (error) {
-				logError('添加到队列失败:', error)
-				Alert.alert('错误', `无法添加到队列: ${error.message || '未知错误'}`)
-			} finally {
-				if (isComponentMounted) {
-					setIsLoading(false)
-				}
-			}
-		},
-		[isComponentMounted],
-	)
-
-	// 播放当前目录中的所有音乐
-	const handlePlayAllMusic = useCallback(async () => {
-		if (!currentServer || !isComponentMounted) {
-			return
-		}
-
+	// 播放音乐
+	const playMusic = useCallback(() => {
 		try {
-			setIsLoading(true)
+			if (!selectedFile || !isComponentMounted) return
 
-			// 获取当前目录下的所有音乐文件（不递归）
-			const musicFiles = await getAllMusicFiles(currentPath, false).catch((err) => {
-				throw err
-			})
-
-			if (!isComponentMounted) return
-
-			if (!musicFiles || musicFiles.length === 0) {
-				Alert.alert('提示', '当前目录没有音乐文件')
-				return
-			}
-
-			// 转换为音乐项并播放
-			const musicItems = webdavFilesToMusicItems(musicFiles)
-
-			if (!musicItems || musicItems.length === 0) {
-				Alert.alert('提示', '无法识别音乐文件')
-				return
-			}
-
-			// 过滤掉无效的音乐项
-			const validMusicItems = musicItems.filter((item) => item && item.url)
-
-			if (validMusicItems.length === 0) {
-				Alert.alert('提示', '无有效的音乐文件可播放')
-				return
-			}
-
-			await myTrackPlayer.addAll(validMusicItems)
-			await myTrackPlayer.play()
-
-			showToast(`正在播放目录中的 ${validMusicItems.length} 首音乐`, 'success')
+			const musicItem = webdavFileToMusicItem(selectedFile)
+			playTrack(musicItem)
+			handleCloseActions()
 		} catch (error) {
-			logError('播放目录音乐失败:', error)
-			if (isComponentMounted) {
-				Alert.alert('错误', `无法播放目录中的音乐: ${error.message || '未知错误'}`)
-			}
-		} finally {
-			if (isComponentMounted) {
-				setIsLoading(false)
-			}
+			logError('播放音乐失败:', error)
+			Alert.alert('错误', '无法播放此音乐文件')
+			handleCloseActions()
 		}
-	}, [currentPath, currentServer, isComponentMounted])
+	}, [selectedFile, isComponentMounted, playTrack])
 
-	// 返回上一级目录
+	// 添加到播放列表
+	const addToPlaylistHandler = useCallback(() => {
+		try {
+			if (!selectedFile || !isComponentMounted) return
+
+			const musicItem = webdavFileToMusicItem(selectedFile)
+			addToPlaylist(musicItem)
+			handleCloseActions()
+
+			// 显示添加成功提示
+			Alert.alert('提示', '已添加到播放列表')
+		} catch (error) {
+			logError('添加到播放列表失败:', error)
+			Alert.alert('错误', '无法添加到播放列表')
+			handleCloseActions()
+		}
+	}, [selectedFile, isComponentMounted, addToPlaylist])
+
+	// 处理返回按钮
 	const handleGoBack = useCallback(() => {
-		if (pathHistory.length > 0 && isComponentMounted) {
+		try {
+			if (!isComponentMounted || pathHistory.length === 0) return
+
+			const prevPath = pathHistory[pathHistory.length - 1]
+			setPathHistory((prev) => prev.slice(0, -1))
+			loadDirectoryContents(prevPath)
+		} catch (error) {
+			logError('返回上级目录失败:', error)
+			// 如果返回失败，尝试回到根目录
 			try {
-				const previousPath = pathHistory[pathHistory.length - 1]
-				setPathHistory((prev) => prev.slice(0, -1))
-				loadDirectoryContents(previousPath)
-			} catch (error) {
-				logError('返回上级目录失败:', error)
+				loadDirectoryContents('/')
+				setPathHistory([])
+			} catch (rootError) {
+				logError('返回根目录失败:', rootError)
 			}
 		}
 	}, [pathHistory, isComponentMounted, loadDirectoryContents])
+
+	// 刷新当前目录
+	const handleRefresh = useCallback(() => {
+		try {
+			if (!isComponentMounted) return
+			loadDirectoryContents(currentPath)
+		} catch (error) {
+			logError('刷新目录失败:', error)
+		}
+	}, [currentPath, isComponentMounted, loadDirectoryContents])
 
 	// 格式化当前路径显示
 	const formatPath = useCallback((path: string) => {
@@ -453,7 +424,7 @@ const WebDAVScreen = () => {
 
 		// 获取路径的最后一部分
 		const parts = path.split('/').filter(Boolean)
-		return parts[parts.length - 1]
+		return parts[parts.length - 1] || '根目录'
 	}, [])
 
 	// 关闭文件操作菜单
@@ -482,92 +453,124 @@ const WebDAVScreen = () => {
 		}
 	}, [router])
 
+	// 渲染分隔线
+	const renderSeparator = useCallback(() => <View style={styles.separator} />, [])
+
+	// 渲染空列表提示
+	const renderEmptyComponent = useCallback(() => {
+		if (isLoading) return null
+
+		return (
+			<View style={styles.emptyContainer}>
+				<Ionicons name="folder-open-outline" size={60} color={colors.subtext} />
+				<Text style={styles.emptyText}>此文件夹为空</Text>
+			</View>
+		)
+	}, [isLoading])
+
+	// 如果没有配置WebDAV服务器
+	if (!currentServer) {
+		return (
+			<ErrorCatcher>
+				<View style={styles.noServerContainer}>
+					<Ionicons name="cloud-outline" size={80} color={colors.subtext} />
+					<Text style={styles.noServerText}>未配置WebDAV服务器</Text>
+					<Text style={{ color: colors.subtext, marginBottom: 20, textAlign: 'center' }}>
+						添加WebDAV服务器以浏览和播放在线音乐文件
+					</Text>
+					<TouchableOpacity style={styles.connectButton} onPress={navigateToSettings}>
+						<Text style={styles.connectButtonText}>添加服务器</Text>
+					</TouchableOpacity>
+				</View>
+			</ErrorCatcher>
+		)
+	}
+
+	// 如果加载出错
+	if (loadError) {
+		return (
+			<ErrorCatcher>
+				<View style={styles.errorContainer}>
+					<Ionicons name="cloud-offline" size={60} color={colors.subtext} />
+					<Text style={styles.errorText}>加载失败</Text>
+					<Text style={styles.errorSubtext}>{loadError}</Text>
+					<TouchableOpacity style={styles.retryButton} onPress={handleRefresh}>
+						<Text style={styles.retryButtonText}>重试</Text>
+					</TouchableOpacity>
+				</View>
+			</ErrorCatcher>
+		)
+	}
+
 	return (
 		<ErrorCatcher>
 			<View style={styles.container}>
-				{!currentServer ? (
-					// 未连接服务器的提示
-					<View style={styles.noServerContainer}>
-						<Ionicons name="cloud-offline" size={60} color="#999" />
-						<Text style={styles.noServerText}>未连接到WebDAV服务器</Text>
-						<TouchableOpacity style={styles.connectButton} onPress={navigateToSettings}>
-							<Text style={styles.connectButtonText}>添加/管理服务器</Text>
+				{/* 服务器信息和导航栏 */}
+				<View style={styles.serverInfoContainer}>
+					<View style={styles.serverInfo}>
+						<Text style={styles.serverName}>{currentServer.name}</Text>
+						<Text style={styles.currentPath}>{formatPath(currentPath)}</Text>
+					</View>
+					<View style={styles.navButtons}>
+						{pathHistory.length > 0 && (
+							<TouchableOpacity style={styles.navButton} onPress={handleGoBack}>
+								<Ionicons name="arrow-back" size={20} color="#fff" />
+							</TouchableOpacity>
+						)}
+						<TouchableOpacity style={styles.navButton} onPress={handleRefresh}>
+							<Ionicons name="refresh" size={20} color="#fff" />
 						</TouchableOpacity>
 					</View>
+				</View>
+
+				{/* 文件列表 */}
+				{isLoading ? (
+					<View style={styles.loadingContainer}>
+						<ActivityIndicator size="large" color={colors.primary} />
+						<Text style={styles.loadingText}>加载中...</Text>
+					</View>
 				) : (
-					// 已连接服务器的内容
-					<>
-						{/* 服务器信息和路径导航 */}
-						<View style={styles.serverInfoContainer}>
-							<View style={styles.serverInfo}>
-								<Text style={styles.serverName}>{currentServer.name || '未知服务器'}</Text>
-								<Text style={styles.currentPath} numberOfLines={1}>
-									{formatPath(currentPath)}
-								</Text>
-							</View>
-
-							<View style={styles.navButtons}>
-								{pathHistory.length > 0 && (
-									<TouchableOpacity style={styles.navButton} onPress={handleGoBack}>
-										<Ionicons name="arrow-back" size={20} color="#fff" />
-									</TouchableOpacity>
-								)}
-								<TouchableOpacity style={styles.navButton} onPress={handlePlayAllMusic}>
-									<Ionicons name="play" size={20} color="#fff" />
-								</TouchableOpacity>
-							</View>
-						</View>
-
-						{/* 文件列表 */}
-						{isLoading ? (
-							<LoadingPlaceholder />
-						) : loadError ? (
-							<View style={styles.errorContainer}>
-								<Ionicons name="alert-circle" size={50} color="#FF6B6B" />
-								<Text style={styles.errorText}>加载失败</Text>
-								<Text style={styles.errorSubtext}>{loadError}</Text>
-								<TouchableOpacity
-									style={styles.retryButton}
-									onPress={() => loadDirectoryContents(currentPath)}
-								>
-									<Text style={styles.retryButtonText}>重试</Text>
-								</TouchableOpacity>
-							</View>
-						) : (
-							<Suspense fallback={<LoadingPlaceholder />}>
-								<FlatList
-									data={files}
-									renderItem={({ item }) => (
-										<LazyFileItem
-											file={item}
-											onPress={safeHandleFilePress}
-											onLongPress={safeHandleFileLongPress}
-										/>
-									)}
-									keyExtractor={(item) => item.path || Math.random().toString()}
-									contentContainerStyle={styles.fileList}
-									ItemSeparatorComponent={() => <View style={styles.separator} />}
-									ListEmptyComponent={
-										<View style={styles.emptyContainer}>
-											<Ionicons name="folder-open" size={50} color="#999" />
-											<Text style={styles.emptyText}>此目录为空</Text>
-										</View>
-									}
-								/>
-							</Suspense>
-						)}
-
-						{/* 文件操作菜单 */}
-						<Suspense fallback={null}>
-							<LazyFileActions
-								file={selectedFile}
-								onPlay={handlePlayFile}
-								onAddToQueue={handleAddToQueue}
-								onClose={handleCloseActions}
-								visible={showActions}
+					<FlatList
+						data={files}
+						keyExtractor={(item) => item.path}
+						renderItem={({ item }) => (
+							<FileItem
+								file={item}
+								onPress={safeHandleFilePress}
+								onLongPress={safeHandleFileLongPress}
 							/>
-						</Suspense>
-					</>
+						)}
+						ItemSeparatorComponent={renderSeparator}
+						ListEmptyComponent={renderEmptyComponent}
+						style={styles.fileList}
+						initialNumToRender={10} // 性能优化
+						maxToRenderPerBatch={5} // 性能优化
+						windowSize={5} // 性能优化
+					/>
+				)}
+
+				{/* 文件操作菜单 */}
+				{showActions && selectedFile && (
+					<View style={styles.actionsOverlay}>
+						<View style={styles.actionsContainer}>
+							<Text style={styles.actionsTitle}>{selectedFile.basename}</Text>
+							<TouchableOpacity style={styles.actionButton} onPress={playMusic}>
+								<Ionicons name="play" size={20} color="#fff" />
+								<Text style={styles.actionText}>立即播放</Text>
+							</TouchableOpacity>
+							<TouchableOpacity style={styles.actionButton} onPress={addToPlaylistHandler}>
+								<Ionicons name="add" size={20} color="#fff" />
+								<Text style={styles.actionText}>添加到播放列表</Text>
+							</TouchableOpacity>
+							<TouchableOpacity
+								style={[styles.actionButton, styles.cancelButton]}
+								onPress={handleCloseActions}
+							>
+								<Ionicons name="close" size={20} color="#fff" />
+								<Text style={styles.actionText}>取消</Text>
+							</TouchableOpacity>
+						</View>
+					</View>
 				)}
 			</View>
 		</ErrorCatcher>
