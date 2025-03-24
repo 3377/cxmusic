@@ -28,6 +28,14 @@ jobs:
         pod install
         cd ..
     
+    - name: Fix ShareExtension path
+      run: |
+        cd ios
+        # 修复ShareExtension-Info.plist路径问题
+        mkdir -p /Users/gyc/Code/music-player-master/ios/ShareExtension
+        cp ShareExtension/ShareExtension-Info.plist /Users/gyc/Code/music-player-master/ios/ShareExtension/
+        cd ..
+    
     - name: Build iOS app
       run: |
         cd ios
@@ -46,6 +54,10 @@ jobs:
         # 创建IPA包
         mkdir -p Payload
         cp -r build/Build/Products/Release-iphoneos/CyMusic.app Payload/
+        if [ -d "build/Build/Products/Release-iphoneos/ShareExtension.appex" ]; then
+          mkdir -p Payload/CyMusic.app/PlugIns
+          cp -r build/Build/Products/Release-iphoneos/ShareExtension.appex Payload/CyMusic.app/PlugIns/
+        fi
         zip -r CyMusic.ipa Payload
         cd ..
     
