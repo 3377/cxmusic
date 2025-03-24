@@ -1,5 +1,5 @@
 import { colors, fontSize, screenPadding } from '@/constants/tokens'
-import { logError, useLoggerHook } from '@/helpers/logger'
+import { useLoggerHook } from '@/helpers/logger'
 import i18n from '@/utils/i18n'
 import { Ionicons } from '@expo/vector-icons'
 import React, { useRef, useState } from 'react'
@@ -12,57 +12,87 @@ import {
 	Pressable,
 	SafeAreaView,
 	ScrollView,
-	Share,
 	StyleSheet,
 	Text,
 	TouchableOpacity,
 	TouchableWithoutFeedback,
 	View,
 } from 'react-native'
+
 const LogScreen = () => {
 	const { logs, clearLogs } = useLoggerHook()
 	const [selectedLog, setSelectedLog] = useState<null | any>(null)
-
-	const [longPressedId, setLongPressedId] = useState<string | null>(null)
+	const [selectedLogs, setSelectedLogs] = useState<Set<number>>(new Set())
+	const [isSelectMode, setIsSelectMode] = useState(false)
 	const fadeAnim = useRef(new Animated.Value(0)).current
-	const handleShare = async () => {
-		const logText = logs.map((log) => `[${log.timestamp}] [${log.level}] ${log.message}`).join('\n')
-		try {
-			await Share.share({
-				message: logText,
-			})
-		} catch (error) {
-			logError(i18n.t('logScreen.shareError'), error)
-		}
-	}
-	const handleLongPress = (item: any) => {
-		setLongPressedId(item.id)
-		handleCopy(item)
-	}
 
-	const handleCopy = (item: any) => {
-		const logText = `[${item.timestamp}] [${item.level}] ${item.message}`
+	const handleCopy = (items: any[]) => {
+		const logText = items
+			.map((item) => `[${item.timestamp}] [${item.level}] ${item.message}`)
+			.join('\n')
 		Clipboard.setString(logText)
-		// 可以添加一个提示，告诉用户日志已复制
 		Alert.alert(i18n.t('logScreen.copy'), i18n.t('logScreen.copyMessage'))
-		setLongPressedId(null)
+		setSelectedLogs(new Set())
+		setIsSelectMode(false)
 		Animated.timing(fadeAnim, {
 			toValue: 0,
 			duration: 500,
 			useNativeDriver: true,
 		}).start()
 	}
-	const renderItem = ({ item }: { item: any }) => (
+
+	const toggleSelectMode = () => {
+		setIsSelectMode(!isSelectMode)
+		if (!isSelectMode) {
+			setSelectedLogs(new Set())
+		}
+	}
+
+	const toggleLogSelection = (index: number) => {
+		const newSelectedLogs = new Set(selectedLogs)
+		if (newSelectedLogs.has(index)) {
+			newSelectedLogs.delete(index)
+		} else {
+			newSelectedLogs.add(index)
+		}
+		setSelectedLogs(newSelectedLogs)
+	}
+
+	const renderItem = ({ item, index }: { item: any; index: number }) => (
 		<Pressable
-			onPress={() => setSelectedLog(item)}
-			onLongPress={() => handleLongPress(item)}
-			style={({ pressed }) => [styles.logItem, pressed && styles.pressed]}
+			onPress={() => {
+				if (isSelectMode) {
+					toggleLogSelection(index)
+				} else {
+					setSelectedLog(item)
+				}
+			}}
+			onLongPress={() => {
+				if (!isSelectMode) {
+					setIsSelectMode(true)
+					toggleLogSelection(index)
+				}
+			}}
+			style={({ pressed }) => [
+				styles.logItem,
+				pressed && styles.pressed,
+				isSelectMode && selectedLogs.has(index) && styles.selectedItem,
+			]}
 		>
 			<View style={styles.logHeader}>
 				<Text style={[styles.logLevel, { color: getLogColor(item.level) }]}>{item.level}</Text>
 				<Text style={styles.logTimestamp}>{formatTimestamp(item.timestamp)}</Text>
 			</View>
 			<Text style={styles.logMessage}>{item.message}</Text>
+			{isSelectMode && (
+				<View style={styles.checkbox}>
+					<Ionicons
+						name={selectedLogs.has(index) ? 'checkbox' : 'square-outline'}
+						size={20}
+						color={selectedLogs.has(index) ? colors.primary : colors.text}
+					/>
+				</View>
+			)}
 		</Pressable>
 	)
 
@@ -91,14 +121,35 @@ const LogScreen = () => {
 				<View style={styles.header}>
 					<Text style={styles.title}>{i18n.t('logScreen.title')}</Text>
 					<View style={styles.headerButtons}>
-						<TouchableOpacity onPress={handleShare} style={styles.iconButton}>
-							<Ionicons name="share-social-outline" size={20} color={colors.text} />
-							<Text style={styles.buttonText}>{i18n.t('logScreen.actions.share')}</Text>
-						</TouchableOpacity>
-						<TouchableOpacity onPress={clearLogs} style={styles.iconButton}>
-							<Ionicons name="trash-outline" size={20} color={colors.text} />
-							<Text style={styles.buttonText}>{i18n.t('logScreen.actions.clear')}</Text>
-						</TouchableOpacity>
+						{isSelectMode ? (
+							<>
+								<TouchableOpacity
+									onPress={() => {
+										const selectedItems = Array.from(selectedLogs).map((index) => logs[index])
+										handleCopy(selectedItems)
+									}}
+									style={styles.iconButton}
+								>
+									<Ionicons name="copy-outline" size={20} color={colors.text} />
+									<Text style={styles.buttonText}>{i18n.t('logScreen.actions.copy')}</Text>
+								</TouchableOpacity>
+								<TouchableOpacity onPress={toggleSelectMode} style={styles.iconButton}>
+									<Ionicons name="close" size={20} color={colors.text} />
+									<Text style={styles.buttonText}>{i18n.t('logScreen.actions.cancel')}</Text>
+								</TouchableOpacity>
+							</>
+						) : (
+							<>
+								<TouchableOpacity onPress={toggleSelectMode} style={styles.iconButton}>
+									<Ionicons name="checkbox-outline" size={20} color={colors.text} />
+									<Text style={styles.buttonText}>{i18n.t('logScreen.actions.select')}</Text>
+								</TouchableOpacity>
+								<TouchableOpacity onPress={clearLogs} style={styles.iconButton}>
+									<Ionicons name="trash-outline" size={20} color={colors.text} />
+									<Text style={styles.buttonText}>{i18n.t('logScreen.actions.clear')}</Text>
+								</TouchableOpacity>
+							</>
+						)}
 					</View>
 				</View>
 				<FlatList
@@ -109,8 +160,12 @@ const LogScreen = () => {
 					contentContainerStyle={logs.length === 0 && styles.emptyContainer}
 					style={styles.flatList}
 				/>
-				{/* 日志详情模态框 */}
-				<Modal visible={selectedLog !== null} transparent animationType="slide">
+				<Modal
+					visible={!!selectedLog}
+					transparent
+					animationType="slide"
+					onRequestClose={() => setSelectedLog(null)}
+				>
 					<TouchableWithoutFeedback onPress={() => setSelectedLog(null)}>
 						<View style={styles.modalOverlay} />
 					</TouchableWithoutFeedback>
@@ -139,6 +194,12 @@ const LogScreen = () => {
 											</Text>
 										</View>
 									)}
+									<TouchableOpacity
+										style={styles.copyButton}
+										onPress={() => handleCopy([selectedLog])}
+									>
+										<Text style={styles.copyButtonText}>{i18n.t('logScreen.actions.copy')}</Text>
+									</TouchableOpacity>
 								</View>
 							)}
 						</ScrollView>
@@ -158,14 +219,13 @@ const styles = StyleSheet.create({
 		flex: 1,
 		backgroundColor: colors.background,
 		paddingHorizontal: screenPadding.horizontal,
-		// 移除 paddingTop: 16，避免内容被顶部遮挡
 	},
 	header: {
 		flexDirection: 'row',
 		justifyContent: 'space-between',
 		alignItems: 'center',
 		marginBottom: 16,
-		paddingVertical: 8, // 增加垂直内边距
+		paddingVertical: 8,
 	},
 	title: {
 		fontSize: fontSize.lg,
@@ -186,17 +246,20 @@ const styles = StyleSheet.create({
 		fontSize: fontSize.sm,
 	},
 	flatList: {
-		flex: 1, // 确保 FlatList 占据剩余空间并可滚动
+		flex: 1,
 	},
 	logItem: {
 		paddingVertical: 12,
 		borderBottomWidth: 1,
 		borderBottomColor: '#333',
+		flexDirection: 'row',
+		alignItems: 'flex-start',
 	},
 	logHeader: {
 		flexDirection: 'row',
 		justifyContent: 'space-between',
 		marginBottom: 4,
+		flex: 1,
 	},
 	logLevel: {
 		fontSize: fontSize.sm,
@@ -209,6 +272,7 @@ const styles = StyleSheet.create({
 	logMessage: {
 		fontSize: fontSize.base,
 		color: colors.text,
+		flex: 1,
 	},
 	emptyContainer: {
 		flexGrow: 1,
@@ -303,6 +367,13 @@ const styles = StyleSheet.create({
 	pressed: {
 		backgroundColor: 'rgba(0, 0, 0, 0.1)',
 		opacity: 0.5,
+	},
+	selectedItem: {
+		backgroundColor: 'rgba(255, 255, 255, 0.1)',
+	},
+	checkbox: {
+		marginLeft: 10,
+		marginTop: 2,
 	},
 })
 

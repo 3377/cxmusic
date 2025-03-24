@@ -78,7 +78,10 @@
 		"title": "应用日志",
 		"actions": {
 			"share": "分享",
-			"clear": "清除"
+			"clear": "清除",
+			"copy": "复制",
+			"select": "选择",
+			"cancel": "取消"
 		},
 		"empty": "暂无日志记录",
 		"details": {

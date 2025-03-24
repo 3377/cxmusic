@@ -74,17 +74,20 @@
 		}
 	},
 	"logScreen": {
-		"title": "Application Logs",
+		"title": "App Logs",
 		"actions": {
 			"share": "Share",
-			"clear": "Clear"
+			"clear": "Clear",
+			"copy": "Copy",
+			"select": "Select",
+			"cancel": "Cancel"
 		},
-		"empty": "No logs recorded yet",
+		"empty": "No logs available",
 		"details": {
 			"title": "Log Details"
 		},
 		"copy": "Copied",
-		"copyMessage": "Log content has been copied to the clipboard",
+		"copyMessage": "Log content copied to clipboard",
 		"shareError": "Failed to share logs"
 	},
 	"appTab": {
