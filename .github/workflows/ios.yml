@@ -28,12 +28,16 @@ jobs:
         pod install
         cd ..
     
-    - name: Fix ShareExtension path
+    - name: Fix project paths
       run: |
         cd ios
-        # 修复ShareExtension-Info.plist路径问题
-        mkdir -p /Users/gyc/Code/music-player-master/ios/ShareExtension
-        cp ShareExtension/ShareExtension-Info.plist /Users/gyc/Code/music-player-master/ios/ShareExtension/
+        # 获取当前工作目录的绝对路径
+        CURRENT_PATH=$(pwd)
+        echo "当前工作目录: $CURRENT_PATH"
+        
+        # 修改项目配置文件中的路径引用
+        find . -name "*.pbxproj" -type f -exec sed -i '' "s|/Users/gyc/Code/music-player-master/ios|$CURRENT_PATH|g" {} \;
+        find . -name "*.xcscheme" -type f -exec sed -i '' "s|/Users/gyc/Code/music-player-master/ios|$CURRENT_PATH|g" {} \;
         cd ..
     
     - name: Build iOS app
