@@ -55,6 +55,7 @@
 		"react-native-track-player": "^4.1.1",
 		"react-native-volume-manager": "^1.10.0",
 		"ts-pattern": "^5.0.8",
+		"webdav": "^5.8.0",
 		"zustand": "^4.5.2"
 	},
 	"devDependencies": {

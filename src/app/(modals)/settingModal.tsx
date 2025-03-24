@@ -258,6 +258,11 @@ const SettingModal = () => {
 					type: 'value',
 					value: '',
 				},
+				{
+					id: '18',
+					title: 'WebDAV服务器管理',
+					type: 'link',
+				},
 			],
 		},
 		{
@@ -515,6 +520,8 @@ const SettingModal = () => {
 						)
 					} else if (item.title === i18n.t('settings.items.currentQuality')) {
 						setIsQualitySelectorVisible(true)
+					} else if (item.title === 'WebDAV服务器管理') {
+						router.push('/(modals)/webdavModal')
 					} else if (item.type === 'link') {
 						if (item.title === i18n.t('settings.items.clearPlaylist')) {
 							Alert.alert(

@@ -1,6 +1,8 @@
 import { playbackService } from '@/constants/playbackService'
 import { colors } from '@/constants/tokens'
+import { logInfo } from '@/helpers/logger'
 import LyricManager from '@/helpers/lyricManager'
+import { setupWebDAV } from '@/helpers/webdavService'
 import { useLogTrackPlayerState } from '@/hooks/useLogTrackPlayerState'
 import { useSetupTrackPlayer } from '@/hooks/useSetupTrackPlayer'
 import i18n, { setI18nConfig } from '@/utils/i18n'
@@ -12,6 +14,7 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler'
 import { SafeAreaProvider } from 'react-native-safe-area-context'
 import Toast, { BaseToast, ErrorToast } from 'react-native-toast-message'
 import TrackPlayer from 'react-native-track-player'
+
 SplashScreen.preventAutoHideAsync()
 
 TrackPlayer.registerPlaybackService(() => playbackService)
@@ -40,6 +43,21 @@ const App = () => {
 			// router.push('/(modals)/settingModal')
 		}
 	}, [hasShareIntent])
+
+	useEffect(() => {
+		const initWebDAV = async () => {
+			try {
+				// 初始化WebDAV服务
+				await setupWebDAV()
+				logInfo('WebDAV服务初始化完成')
+			} catch (error) {
+				console.error('Failed to initialize WebDAV:', error)
+			}
+		}
+
+		initWebDAV()
+	}, [])
+
 	useEffect(() => {
 		const initI18n = async () => {
 			try {

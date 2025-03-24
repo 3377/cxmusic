@@ -55,6 +55,13 @@ const TabsNavigation = () => {
 					}}
 				/>
 				<Tabs.Screen
+					name="webdav"
+					options={{
+						title: 'WebDAV',
+						tabBarIcon: ({ color }) => <Ionicons name="cloud-outline" size={24} color={color} />,
+					}}
+				/>
+				<Tabs.Screen
 					name="favorites"
 					options={{
 						title: i18n.t('appTab.favorites'),

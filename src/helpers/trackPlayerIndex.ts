@@ -146,6 +146,23 @@ async function setupTrackPlayer() {
 	if (songsNumsToLoad) {
 		songsNumsToLoadStore.setValue(songsNumsToLoad)
 	}
+
+	// 设置播放器支持的格式
+	const capabilities = [
+		ReactNativeTrackPlayer.Capability.Play,
+		ReactNativeTrackPlayer.Capability.Pause,
+		ReactNativeTrackPlayer.Capability.SkipToNext,
+		ReactNativeTrackPlayer.Capability.SkipToPrevious,
+		ReactNativeTrackPlayer.Capability.Stop,
+		ReactNativeTrackPlayer.Capability.SeekTo,
+	]
+
+	// 支持WebDAV音乐文件格式
+	await ReactNativeTrackPlayer.setupPlayer({
+		capabilities,
+		supportedExtensions: ['mp3', 'flac', 'wav', 'ogg', 'm4a', 'aac'],
+	})
+
 	if (!hasSetupListener) {
 		ReactNativeTrackPlayer.addEventListener(Event.PlaybackActiveTrackChanged, async (evt) => {
 			if (evt.index === 1 && evt.lastIndex === 0 && evt.track?.$ === internalFakeSoundKey) {
