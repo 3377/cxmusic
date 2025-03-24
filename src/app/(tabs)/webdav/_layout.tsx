@@ -1,14 +1,19 @@
 import { colors } from '@/constants/tokens'
-import { logError } from '@/helpers/logger'
+import { logError, logInfo } from '@/helpers/logger'
+import {
+	setupWebDAV,
+	subscribeToWebDAVStatus,
+	useCurrentWebDAVServer,
+} from '@/helpers/webdavService'
 import { Feather } from '@expo/vector-icons'
-import { Stack, useRouter } from 'expo-router'
+import { Redirect, Stack, useRouter } from 'expo-router'
 import React, { useEffect, useState } from 'react'
 import { ActivityIndicator, Text, TouchableOpacity, View } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 
 // 错误边界组件
 class ErrorBoundary extends React.Component {
-	state = { hasError: false, error: null }
+	state = { hasError: false, error: null, errorCount: 0 }
 
 	static getDerivedStateFromError(error) {
 		return { hasError: true, error }
@@ -19,11 +24,21 @@ class ErrorBoundary extends React.Component {
 	}
 
 	retry = () => {
-		this.setState({ hasError: false, error: null })
+		this.setState((prevState) => ({
+			hasError: false,
+			error: null,
+			errorCount: prevState.errorCount + 1,
+		}))
 	}
 
 	render() {
 		const insets = useSafeAreaInsets ? useSafeAreaInsets() : { top: 0 }
+
+		// 如果错误次数过多，返回到主页
+		if (this.state.errorCount > 5) {
+			logError('WebDAV组件多次尝试失败，返回主页')
+			return <Redirect href="/(tabs)/" />
+		}
 
 		if (this.state.hasError) {
 			return (
@@ -52,6 +67,7 @@ class ErrorBoundary extends React.Component {
 							marginTop: 8,
 							color: colors.textMuted,
 							textAlign: 'center',
+							paddingHorizontal: 24,
 						}}
 					>
 						{this.state.error?.message || '未知错误'}
@@ -66,6 +82,19 @@ class ErrorBoundary extends React.Component {
 						}}
 					>
 						<Text style={{ color: '#fff' }}>重试</Text>
+					</TouchableOpacity>
+					<TouchableOpacity
+						onPress={() => {
+							this.props.navigation?.goBack() || this.props.router?.back()
+						}}
+						style={{
+							marginTop: 12,
+							backgroundColor: 'transparent',
+							padding: 12,
+							borderRadius: 8,
+						}}
+					>
+						<Text style={{ color: colors.text }}>返回上一页</Text>
 					</TouchableOpacity>
 				</View>
 			)
@@ -112,49 +141,80 @@ function LoadingView() {
 export default function WebDavLayout() {
 	const router = useRouter()
 	const [isLoading, setIsLoading] = useState(true)
+	const [isInitialized, setIsInitialized] = useState(false)
+	const currentServer = useCurrentWebDAVServer()
+
+	// 初始化WebDAV服务
+	useEffect(() => {
+		const initWebDAV = async () => {
+			try {
+				logInfo('WebDAV布局: 开始初始化WebDAV服务')
+				setIsLoading(true)
+
+				// 等待WebDAV服务初始化
+				await setupWebDAV()
+
+				// 短暂延迟以确保UI状态更新
+				setTimeout(() => {
+					setIsInitialized(true)
+					setIsLoading(false)
+					logInfo('WebDAV布局: WebDAV服务初始化完成')
+				}, 500)
+			} catch (error) {
+				logError('WebDAV布局: 初始化WebDAV服务失败', error)
+				setIsInitialized(true)
+				setIsLoading(false)
+			}
+		}
+
+		initWebDAV()
+
+		// 订阅WebDAV状态变更
+		const unsubscribe = subscribeToWebDAVStatus(() => {
+			logInfo('WebDAV布局: WebDAV状态已更新')
+		})
+
+		return () => {
+			unsubscribe()
+		}
+	}, [])
 
 	// 处理设置按钮点击
 	const handleSettingsPress = () => {
 		try {
+			logInfo('WebDAV布局: 打开WebDAV设置')
 			router.push('/webdavModal')
 		} catch (error) {
-			logError('WebDAV设置导航错误:', error)
+			logError('WebDAV布局: WebDAV设置导航错误', error)
 		}
 	}
 
-	// 模拟加载时间
-	useEffect(() => {
-		const timer = setTimeout(() => {
-			setIsLoading(false)
-		}, 500)
-		return () => clearTimeout(timer)
-	}, [])
+	// 如果WebDAV服务未初始化完成，显示加载界面
+	if (!isInitialized || isLoading) {
+		return <LoadingView />
+	}
 
 	return (
-		<ErrorBoundary>
-			{isLoading ? (
-				<LoadingView />
-			) : (
-				<Stack
-					screenOptions={{
-						headerStyle: {
-							backgroundColor: colors.background,
-						},
-						headerTintColor: colors.text,
-						headerTitleStyle: {
-							fontWeight: 'bold',
-						},
-						headerRight: () => <SafeHeaderButton onPress={handleSettingsPress} />,
+		<ErrorBoundary router={router}>
+			<Stack
+				screenOptions={{
+					headerStyle: {
+						backgroundColor: colors.background,
+					},
+					headerTintColor: colors.text,
+					headerTitleStyle: {
+						fontWeight: 'bold',
+					},
+					headerRight: () => <SafeHeaderButton onPress={handleSettingsPress} />,
+				}}
+			>
+				<Stack.Screen
+					name="index"
+					options={{
+						title: 'WebDAV文件',
 					}}
-				>
-					<Stack.Screen
-						name="index"
-						options={{
-							title: 'WebDAV文件',
-						}}
-					/>
-				</Stack>
-			)}
+				/>
+			</Stack>
 		</ErrorBoundary>
 	)
 }

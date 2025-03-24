@@ -1,13 +1,13 @@
 import { colors } from '@/constants/tokens'
-import { logError } from '@/helpers/logger'
+import { logError, logInfo } from '@/helpers/logger'
 import {
 	WebDAVServer,
 	addWebDAVServer,
 	connectToServer,
 	deleteWebDAVServer,
 	getCurrentWebDAVServer,
+	getWebDAVServers,
 	setDefaultWebDAVServer,
-	useWebDAVServers,
 } from '@/helpers/webdavService'
 import { showToast } from '@/utils/utils'
 import { Feather, Ionicons } from '@expo/vector-icons'
@@ -260,58 +260,55 @@ const ServerEditModal = ({ isVisible, onClose, initialServer = null }) => {
 
 // 服务器项组件
 const ServerItem = ({ server, onEdit, onDelete, onSetDefault, onTest, isCurrentServer }) => {
-	if (!server) return null
-
-	try {
-		return (
-			<View style={styles.serverItem}>
-				<View style={styles.serverInfo}>
-					<Text style={styles.serverName}>{server.name || '未命名服务器'}</Text>
-					<Text style={styles.serverUrl}>{server.url || '无URL'}</Text>
-					{server.isDefault && <Text style={styles.defaultBadge}>默认</Text>}
-					{isCurrentServer && <Text style={styles.currentBadge}>当前连接</Text>}
-				</View>
-				<View style={styles.serverActions}>
-					<TouchableOpacity
-						style={[styles.actionButton, styles.testButton]}
-						onPress={() => onTest(server)}
-					>
-						<Text style={styles.actionButtonText}>测试</Text>
-					</TouchableOpacity>
-					{!server.isDefault && (
-						<TouchableOpacity
-							style={[styles.actionButton, styles.defaultButton]}
-							onPress={() => onSetDefault(server)}
+	return (
+		<View style={styles.serverItem}>
+			<View style={styles.serverContent}>
+				<TouchableOpacity
+					onPress={() => onEdit(server)}
+					style={styles.serverContentText}
+					activeOpacity={0.6}
+				>
+					<View style={{ flexDirection: 'row', alignItems: 'center', marginRight: 8 }}>
+						<Feather
+							name="server"
+							size={18}
+							color={isCurrentServer ? colors.primary : colors.text}
+							style={{ marginRight: 8 }}
+						/>
+						<Text
+							style={[
+								styles.serverName,
+								isCurrentServer && { color: colors.primary, fontWeight: 'bold' },
+							]}
+							numberOfLines={1}
 						>
-							<Text style={styles.actionButtonText}>设为默认</Text>
-						</TouchableOpacity>
-					)}
-					<TouchableOpacity
-						style={[styles.actionButton, styles.editButton]}
-						onPress={() => onEdit(server)}
-					>
-						<Text style={styles.actionButtonText}>编辑</Text>
+							{server.name || '未命名服务器'}
+						</Text>
+					</View>
+					<Text style={styles.serverUrl} numberOfLines={1}>
+						{server.url || '未设置URL'}
+					</Text>
+				</TouchableOpacity>
+				<View style={styles.serverActions}>
+					<TouchableOpacity onPress={() => onTest(server)} style={styles.iconButton}>
+						<Feather name="check-circle" size={20} color={colors.success} />
 					</TouchableOpacity>
+
 					<TouchableOpacity
-						style={[styles.actionButton, styles.deleteButton]}
-						onPress={() => onDelete(server)}
+						onPress={() => onSetDefault(server.id)}
+						style={[styles.iconButton, { opacity: isCurrentServer ? 0.5 : 1 }]}
+						disabled={isCurrentServer}
 					>
-						<Text style={styles.actionButtonText}>删除</Text>
+						<Feather name="star" size={20} color={isCurrentServer ? colors.primary : colors.text} />
+					</TouchableOpacity>
+
+					<TouchableOpacity onPress={() => onDelete(server)} style={styles.iconButton}>
+						<Feather name="trash-2" size={20} color="#ff4d4f" />
 					</TouchableOpacity>
 				</View>
 			</View>
-		)
-	} catch (error) {
-		logError('渲染服务器项失败:', error)
-		return (
-			<View style={styles.serverItem}>
-				<View style={styles.serverInfo}>
-					<Text style={styles.serverName}>加载失败</Text>
-					<Text style={styles.serverUrl}>无法显示服务器信息</Text>
-				</View>
-			</View>
-		)
-	}
+		</View>
+	)
 }
 
 // 在函数组件开头添加以下函数
@@ -343,8 +340,8 @@ const validateServerConfig = (server) => {
 const WebDAVModal = () => {
 	const insets = useSafeAreaInsets()
 	const router = useRouter()
-	const servers = useWebDAVServers()
-	const [isLoading, setIsLoading] = useState(false)
+	const [servers, setServers] = useState<WebDAVServer[]>([])
+	const [isLoading, setIsLoading] = useState(true)
 	const [modalVisible, setModalVisible] = useState(false)
 	const [selectedServer, setSelectedServer] = useState<WebDAVServer | null>(null)
 	const [currentServerState, setCurrentServerState] = useState<WebDAVServer | null>(null)
@@ -358,19 +355,37 @@ const WebDAVModal = () => {
 		return () => setIsComponentMounted(false)
 	}, [])
 
+	// 加载服务器列表
+	const loadServers = useCallback(async () => {
+		try {
+			if (!isComponentMounted) return
+
+			setIsLoading(true)
+			setLoadError(null)
+
+			// 获取最新的服务器列表
+			const serversList = getWebDAVServers()
+			setServers(serversList)
+
+			// 获取当前服务器
+			const current = getCurrentWebDAVServer()
+			setCurrentServerState(current)
+
+			logInfo('WebDAV设置: 已加载服务器列表', { count: serversList.length })
+		} catch (err) {
+			logError('WebDAV设置: 加载服务器列表失败', err)
+			setLoadError('加载服务器列表失败: ' + (err.message || '未知错误'))
+		} finally {
+			if (isComponentMounted) {
+				setIsLoading(false)
+			}
+		}
+	}, [isComponentMounted])
+
 	// 安全地获取当前服务器
 	useEffect(() => {
-		if (!isComponentMounted) return
-
-		try {
-			const server = getCurrentWebDAVServer()
-			setCurrentServerState(server)
-			setLoadError(null)
-		} catch (error) {
-			logError('获取当前WebDAV服务器失败:', error)
-			setLoadError('无法加载当前WebDAV服务器状态')
-		}
-	}, [servers, isComponentMounted])
+		loadServers()
+	}, [loadServers])
 
 	// 全局错误处理
 	const safeAction = useCallback(
@@ -448,17 +463,25 @@ const WebDAVModal = () => {
 		[safeAction, isComponentMounted],
 	)
 
-	const handleSetDefaultServer = useCallback(
-		(server: WebDAVServer) => {
-			if (!isComponentMounted || !server) return
+	const handleSetDefault = useCallback(
+		async (serverId: string) => {
+			return await safeAction(
+				async () => {
+					if (!isComponentMounted) return false
 
-			safeAction(
-				async () => setDefaultWebDAVServer(server.id),
-				`已设置 "${server.name || '未命名'}" 为默认服务器`,
+					logInfo('WebDAV设置: 设置默认服务器', { serverId })
+					const result = await setDefaultWebDAVServer(serverId)
+
+					// 重新加载服务器列表
+					await loadServers()
+
+					return result
+				},
+				'设置默认服务器成功',
 				'设置默认服务器失败',
 			)
 		},
-		[safeAction, isComponentMounted],
+		[isComponentMounted, safeAction, loadServers],
 	)
 
 	const handleTestServer = useCallback(
@@ -518,7 +541,7 @@ const WebDAVModal = () => {
 						server={item}
 						onEdit={handleEditServer}
 						onDelete={handleDeleteServer}
-						onSetDefault={handleSetDefaultServer}
+						onSetDefault={handleSetDefault}
 						onTest={handleTestServer}
 						isCurrentServer={currentServerState?.id === item.id}
 					/>
@@ -528,51 +551,73 @@ const WebDAVModal = () => {
 				return null
 			}
 		},
-		[
-			handleEditServer,
-			handleDeleteServer,
-			handleSetDefaultServer,
-			handleTestServer,
-			currentServerState,
-		],
+		[handleEditServer, handleDeleteServer, handleSetDefault, handleTestServer, currentServerState],
 	)
 
-	// 如果加载错误，显示错误信息
-	if (loadError) {
+	// 刷新服务器列表
+	const handleRefresh = useCallback(() => {
+		if (!isComponentMounted) return
+		logInfo('WebDAV设置: 手动刷新服务器列表')
+		loadServers()
+	}, [isComponentMounted, loadServers])
+
+	// 渲染加载中状态
+	if (isLoading) {
 		return (
-			<View style={[styles.container, { paddingTop: insets.top }]}>
+			<View style={styles.container}>
 				<View style={styles.header}>
-					<Text style={styles.headerTitle}>WebDAV 服务器</Text>
 					<TouchableOpacity
-						style={styles.closeButton}
-						onPress={handleGoBack}
-						hitSlop={{ top: 10, right: 10, bottom: 10, left: 10 }}
+						style={styles.backButton}
+						onPress={() => router.back()}
+						hitSlop={{ top: 20, bottom: 20, left: 20, right: 20 }}
 					>
-						<Ionicons name="close" size={24} color={colors.text} />
+						<Ionicons name="arrow-back" size={24} color={colors.text} />
+					</TouchableOpacity>
+					<Text style={styles.title}>WebDAV设置</Text>
+					<TouchableOpacity
+						style={styles.refreshButton}
+						onPress={handleRefresh}
+						disabled={isLoading}
+					>
+						<Feather name="refresh-cw" size={20} color={colors.text} />
 					</TouchableOpacity>
 				</View>
 
-				<View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', padding: 20 }}>
-					<Ionicons name="alert-circle" size={60} color="#FF6B6B" />
-					<Text
-						style={{ fontSize: 18, fontWeight: 'bold', marginVertical: 20, textAlign: 'center' }}
-					>
-						{loadError}
-					</Text>
+				<View style={styles.loadingContainer}>
+					<ActivityIndicator size="large" color={colors.primary} />
+					<Text style={styles.loadingText}>加载中...</Text>
+				</View>
+			</View>
+		)
+	}
+
+	// 渲染错误状态
+	if (loadError) {
+		return (
+			<View style={styles.container}>
+				<View style={styles.header}>
 					<TouchableOpacity
-						style={styles.addButton}
-						onPress={() => {
-							setLoadError(null)
-							// 尝试重新获取当前服务器
-							try {
-								const server = getCurrentWebDAVServer()
-								setCurrentServerState(server)
-							} catch (error) {
-								logError('重试获取当前WebDAV服务器失败:', error)
-							}
-						}}
+						style={styles.backButton}
+						onPress={() => router.back()}
+						hitSlop={{ top: 20, bottom: 20, left: 20, right: 20 }}
 					>
-						<Text style={styles.addButtonText}>重试</Text>
+						<Ionicons name="arrow-back" size={24} color={colors.text} />
+					</TouchableOpacity>
+					<Text style={styles.title}>WebDAV设置</Text>
+					<TouchableOpacity
+						style={styles.refreshButton}
+						onPress={handleRefresh}
+						disabled={isLoading}
+					>
+						<Feather name="refresh-cw" size={20} color={colors.text} />
+					</TouchableOpacity>
+				</View>
+
+				<View style={styles.errorContainer}>
+					<Feather name="alert-triangle" size={48} color="red" />
+					<Text style={styles.errorText}>{loadError}</Text>
+					<TouchableOpacity style={styles.retryButton} onPress={handleRefresh}>
+						<Text style={styles.retryButtonText}>重试</Text>
 					</TouchableOpacity>
 				</View>
 			</View>
@@ -736,8 +781,12 @@ const styles = StyleSheet.create({
 		padding: 15,
 		marginBottom: 15,
 	},
-	serverInfo: {
-		marginBottom: 10,
+	serverContent: {
+		flexDirection: 'row',
+		alignItems: 'center',
+	},
+	serverContentText: {
+		flex: 1,
 	},
 	serverName: {
 		fontSize: 18,
@@ -750,61 +799,14 @@ const styles = StyleSheet.create({
 		color: colors.subtext,
 		marginBottom: 5,
 	},
-	defaultBadge: {
-		position: 'absolute',
-		top: 0,
-		right: 0,
-		backgroundColor: colors.accent,
-		paddingHorizontal: 8,
-		paddingVertical: 4,
-		borderRadius: 10,
-		color: '#fff',
-		fontSize: 12,
-		fontWeight: 'bold',
-	},
-	currentBadge: {
-		position: 'absolute',
-		top: 0,
-		right: 70,
-		backgroundColor: 'green',
-		paddingHorizontal: 8,
-		paddingVertical: 4,
-		borderRadius: 10,
-		color: '#fff',
-		fontSize: 12,
-		fontWeight: 'bold',
-	},
 	serverActions: {
 		flexDirection: 'row',
 		justifyContent: 'flex-end',
 	},
-	actionButton: {
-		paddingHorizontal: 10,
-		paddingVertical: 6,
+	iconButton: {
+		padding: 6,
 		borderRadius: 5,
 		marginLeft: 8,
-	},
-	testButton: {
-		backgroundColor: '#4CAF50',
-	},
-	defaultButton: {
-		backgroundColor: '#2196F3',
-	},
-	editButton: {
-		backgroundColor: '#FF9800',
-	},
-	deleteButton: {
-		backgroundColor: '#F44336',
-	},
-	actionButtonText: {
-		color: '#fff',
-		fontSize: 12,
-		fontWeight: 'bold',
-	},
-	separator: {
-		height: 1,
-		backgroundColor: colors.border,
-		marginVertical: 10,
 	},
 	modalOverlay: {
 		flex: 1,
@@ -880,6 +882,55 @@ const styles = StyleSheet.create({
 		fontSize: 16,
 		color: colors.subtext,
 		textAlign: 'center',
+	},
+	backButton: {
+		position: 'absolute',
+		top: 0,
+		left: 0,
+		padding: 10,
+	},
+	title: {
+		fontSize: 34,
+		fontWeight: 'bold',
+		color: colors.text,
+	},
+	refreshButton: {
+		position: 'absolute',
+		top: 0,
+		right: 0,
+		padding: 10,
+	},
+	loadingContainer: {
+		flex: 1,
+		justifyContent: 'center',
+		alignItems: 'center',
+	},
+	loadingText: {
+		fontSize: 18,
+		fontWeight: 'bold',
+		color: colors.text,
+		marginTop: 20,
+	},
+	errorContainer: {
+		flex: 1,
+		justifyContent: 'center',
+		alignItems: 'center',
+		padding: 20,
+	},
+	errorText: {
+		fontSize: 18,
+		fontWeight: 'bold',
+		color: colors.text,
+		marginBottom: 20,
+	},
+	retryButton: {
+		backgroundColor: colors.accent,
+		padding: 12,
+		borderRadius: 8,
+	},
+	retryButtonText: {
+		color: '#fff',
+		fontWeight: 'bold',
 	},
 })
 

@@ -665,3 +665,37 @@ export const verifyWebDAVConnection = async (server: WebDAVServer): Promise<bool
 		return false
 	}
 }
+
+/**
+ * 设置默认WebDAV服务器
+ * @param id 服务器ID
+ * @returns 是否成功设置默认服务器
+ */
+export async function setDefaultWebDAVServer(id: string): Promise<boolean> {
+	try {
+		// 查找服务器
+		const serverToSetDefault = servers.find((s) => s.id === id)
+		if (!serverToSetDefault) {
+			logError(`未找到ID为${id}的WebDAV服务器`)
+			return false
+		}
+
+		// 尝试连接到服务器
+		try {
+			await connectToServer(serverToSetDefault)
+			logInfo(`成功连接到默认WebDAV服务器: ${serverToSetDefault.name}`)
+		} catch (connectError) {
+			logError(`连接到默认WebDAV服务器失败: ${connectError.message}`)
+			return false
+		}
+
+		// 通知订阅者更新
+		notifySubscribers()
+
+		logInfo(`已设置默认WebDAV服务器: ${serverToSetDefault.name}`)
+		return true
+	} catch (error) {
+		logError('设置默认WebDAV服务器失败:', error)
+		return false
+	}
+}
