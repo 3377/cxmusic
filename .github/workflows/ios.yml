@@ -30,6 +30,17 @@ jobs:
         find . -name "*.pbxproj" -exec sed -i '' 's/IPHONEOS_DEPLOYMENT_TARGET = [0-9.]*;/IPHONEOS_DEPLOYMENT_TARGET = 15.0;/g' {} +
         cd ..
     
+    - name: Fix project paths
+      run: |
+        cd ios
+        # 获取当前工作目录
+        CURRENT_PATH=$(pwd)
+        # 替换所有硬编码的本地路径
+        find . -type f -name "*.pbxproj" -exec sed -i '' "s|/Users/gyc/Code/music-player-master/ios|${CURRENT_PATH}|g" {} +
+        find . -type f -name "*.xcconfig" -exec sed -i '' "s|/Users/gyc/Code/music-player-master/ios|${CURRENT_PATH}|g" {} +
+        find . -type f -name "*.plist" -exec sed -i '' "s|/Users/gyc/Code/music-player-master/ios|${CURRENT_PATH}|g" {} +
+        cd ..
+    
     - name: Build iOS app
       run: |
         cd ios
