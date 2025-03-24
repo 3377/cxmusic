@@ -279,15 +279,58 @@ export function getFileUrl(filePath: string): string {
 		throw new Error('WebDAV客户端未连接')
 	}
 
-	// 构建文件的完整URL
-	const url = new URL(filePath, currentServer.url)
+	try {
+		// 确保filePath是有效的
+		if (!filePath) {
+			throw new Error('无效的文件路径')
+		}
 
-	// 添加基本认证
-	const authString = `${currentServer.username}:${currentServer.password}`
-	const base64Auth = Buffer.from(authString).toString('base64')
+		// 确保URL是有效的
+		let serverUrl = currentServer.url
+		if (!serverUrl.endsWith('/')) {
+			serverUrl += '/'
+		}
 
-	// 将认证信息添加到URL中（最终URL格式：https://username:password@example.com/path/to/file.mp3）
-	return url.toString()
+		// 移除filePath开头的斜杠以避免重复
+		const cleanPath = filePath.startsWith('/') ? filePath.slice(1) : filePath
+
+		// 构建基本URL
+		let fullUrl = `${serverUrl}${cleanPath}`
+
+		// 如果URL包含认证信息，不要重复添加
+		if (!fullUrl.includes('@')) {
+			// 使用URL对象解析URL
+			try {
+				const url = new URL(fullUrl)
+
+				// 添加基本认证
+				if (currentServer.username && currentServer.password) {
+					// 使用先编码用户名和密码以避免特殊字符问题
+					const encodedUsername = encodeURIComponent(currentServer.username)
+					const encodedPassword = encodeURIComponent(currentServer.password)
+					url.username = encodedUsername
+					url.password = encodedPassword
+					fullUrl = url.toString()
+				}
+			} catch (e) {
+				// URL解析失败，回退到简单的字符串拼接
+				logError('URL解析失败，使用简单拼接:', e)
+				if (currentServer.username && currentServer.password) {
+					const urlParts = fullUrl.split('://')
+					if (urlParts.length === 2) {
+						const encodedUsername = encodeURIComponent(currentServer.username)
+						const encodedPassword = encodeURIComponent(currentServer.password)
+						fullUrl = `${urlParts[0]}://${encodedUsername}:${encodedPassword}@${urlParts[1]}`
+					}
+				}
+			}
+		}
+
+		return fullUrl
+	} catch (error) {
+		logError('构建WebDAV文件URL失败:', error)
+		throw new Error(`无法创建文件URL: ${error.message}`)
+	}
 }
 
 /**
@@ -299,36 +342,85 @@ export function webdavFileToMusicItem(file: WebDAVFile): IMusic.IMusicItem {
 		throw new Error('WebDAV客户端未连接')
 	}
 
-	// 提取音乐文件的文件名作为歌曲名
-	const title = file.basename.replace(/\.[^/.]+$/, '') // 去除扩展名
+	try {
+		// 确保文件对象有效
+		if (!file || !file.path) {
+			throw new Error('无效的文件对象')
+		}
 
-	// 创建音乐项
-	return {
-		id: `webdav-${currentServer.id}-${file.path}`,
-		platform: 'webdav',
-		artist: currentServer.name, // 使用服务器名称作为艺术家名
-		title,
-		duration: 0, // 由于WebDAV不提供音频时长，设为0
-		album: '未知专辑',
-		artwork: '', // 默认无封面
-		url: getFileUrl(file.path),
-		source: {
-			'128k': {
-				url: getFileUrl(file.path),
-				headers: {
-					Authorization: `Basic ${Buffer.from(`${currentServer.username}:${currentServer.password}`).toString('base64')}`,
+		// 提取音乐文件的文件名作为歌曲名
+		const title = file.basename ? file.basename.replace(/\.[^/.]+$/, '') : '未知歌曲' // 去除扩展名
+
+		// 获取文件URL（包含错误处理）
+		let fileUrl = ''
+		try {
+			fileUrl = getFileUrl(file.path)
+		} catch (e) {
+			logError('获取文件URL失败，使用原始路径:', e)
+			fileUrl = file.path
+		}
+
+		// 创建认证头信息
+		let authHeaders = {}
+		try {
+			if (currentServer.username && currentServer.password) {
+				const authString = `${currentServer.username}:${currentServer.password}`
+				const base64Auth = Buffer.from(authString).toString('base64')
+				authHeaders = {
+					Authorization: `Basic ${base64Auth}`,
+				}
+			}
+		} catch (e) {
+			logError('创建认证头失败:', e)
+		}
+
+		// 创建音乐项
+		return {
+			id: `webdav-${currentServer.id}-${file.path}`,
+			platform: 'webdav',
+			artist: currentServer.name || '未知艺术家', // 使用服务器名称作为艺术家名
+			title: title,
+			duration: 0, // 由于WebDAV不提供音频时长，设为0
+			album: '未知专辑',
+			artwork: '', // 默认无封面
+			url: fileUrl,
+			source: {
+				'128k': {
+					url: fileUrl,
+					headers: authHeaders,
+					size: file.size || 0,
 				},
-				size: file.size,
 			},
-		},
-		// 保存原始文件信息，以便后续处理
-		webdav: {
-			serverId: currentServer.id,
-			serverName: currentServer.name,
-			path: file.path,
-			size: file.size,
-			mime: file.mime,
-		},
+			// 保存原始文件信息，以便后续处理
+			webdav: {
+				serverId: currentServer.id,
+				serverName: currentServer.name,
+				path: file.path,
+				size: file.size || 0,
+				mime: file.mime || '',
+			},
+		}
+	} catch (error) {
+		logError('创建WebDAV音乐项失败:', error)
+
+		// 即使出错，也返回一个最小可用的音乐项
+		return {
+			id: `webdav-error-${Date.now()}`,
+			platform: 'webdav',
+			artist: '加载失败',
+			title: file?.basename || '无法加载文件',
+			duration: 0,
+			album: '未知专辑',
+			artwork: '',
+			url: '',
+			source: {
+				'128k': {
+					url: '',
+					headers: {},
+					size: 0,
+				},
+			},
+		}
 	}
 }
 

@@ -10,6 +10,7 @@ import {
 	useWebDAVServers,
 } from '@/helpers/webdavService'
 import { showToast } from '@/utils/utils'
+import { Ionicons } from '@expo/vector-icons'
 import { useRouter } from 'expo-router'
 import React, { useEffect, useState } from 'react'
 import {
@@ -223,6 +224,28 @@ const WebDAVModal = () => {
 	const [selectedServer, setSelectedServer] = useState<WebDAVServer | null>(null)
 	const currentServer = getCurrentWebDAVServer()
 
+	// 全局错误处理
+	const safeAction = async (
+		action: () => Promise<any>,
+		successMessage?: string,
+		errorPrefix?: string,
+	) => {
+		try {
+			setIsLoading(true)
+			const result = await action()
+			if (successMessage) {
+				showToast(successMessage, 'success')
+			}
+			return result
+		} catch (error) {
+			logError(`${errorPrefix || '操作失败'}:`, error)
+			Alert.alert('错误', `${errorPrefix || '操作失败'}: ${error.message || '未知错误'}`)
+			return false
+		} finally {
+			setIsLoading(false)
+		}
+	}
+
 	const handleAddServer = () => {
 		setSelectedServer(null)
 		setModalVisible(true)
@@ -234,74 +257,48 @@ const WebDAVModal = () => {
 	}
 
 	const handleDeleteServer = (server: WebDAVServer) => {
-		Alert.alert(
-			'删除服务器',
-			`确定要删除服务器 "${server.name}" 吗？`,
-			[
-				{ text: '取消', style: 'cancel' },
-				{
-					text: '删除',
-					style: 'destructive',
-					onPress: async () => {
-						try {
-							setIsLoading(true)
-							const success = await deleteWebDAVServer(server.id)
-							if (success) {
-								showToast('服务器已删除', 'success')
-							} else {
-								Alert.alert('错误', '删除服务器失败')
-							}
-						} catch (error) {
-							logError('删除服务器失败:', error)
-							Alert.alert('错误', `删除服务器失败: ${error.message}`)
-						} finally {
-							setIsLoading(false)
-						}
-					},
+		Alert.alert('删除服务器', `确定要删除服务器 "${server.name}" 吗？`, [
+			{ text: '取消', style: 'cancel' },
+			{
+				text: '删除',
+				style: 'destructive',
+				onPress: async () => {
+					await safeAction(
+						async () => deleteWebDAVServer(server.id),
+						'服务器已删除',
+						'删除服务器失败',
+					)
 				},
-			],
-			{ cancelable: true },
+			},
+		])
+	}
+
+	const handleSetDefaultServer = (server: WebDAVServer) => {
+		safeAction(
+			async () => setDefaultWebDAVServer(server.id),
+			`已设置 "${server.name}" 为默认服务器`,
+			'设置默认服务器失败',
 		)
 	}
 
-	const handleSetDefaultServer = async (server: WebDAVServer) => {
-		try {
-			setIsLoading(true)
-			const success = await setDefaultWebDAVServer(server.id)
-			if (success) {
-				showToast(`${server.name} 已设为默认服务器`, 'success')
-			} else {
-				Alert.alert('错误', '设置默认服务器失败')
-			}
-		} catch (error) {
-			logError('设置默认服务器失败:', error)
-			Alert.alert('错误', `设置默认服务器失败: ${error.message}`)
-		} finally {
-			setIsLoading(false)
-		}
+	const handleTestServer = (server: WebDAVServer) => {
+		safeAction(
+			async () => {
+				const success = await connectToServer(server)
+				if (!success) {
+					throw new Error('连接测试失败')
+				}
+				return success
+			},
+			'连接测试成功',
+			'连接测试失败',
+		)
 	}
 
-	const handleTestServer = async (server: WebDAVServer) => {
-		try {
-			setIsLoading(true)
-			const success = await connectToServer(server)
-			if (success) {
-				showToast(`连接到 ${server.name} 成功`, 'success')
-			} else {
-				Alert.alert('连接失败', '无法连接到服务器，请检查URL和凭据')
-			}
-		} catch (error) {
-			logError('测试服务器连接失败:', error)
-			Alert.alert('连接失败', `无法连接到服务器: ${error.message}`)
-		} finally {
-			setIsLoading(false)
-		}
-	}
-
-	const handleModalClose = (refresh: boolean) => {
+	const handleCloseModal = (shouldRefresh: boolean) => {
 		setModalVisible(false)
-		if (refresh) {
-			// 刷新数据（列表已通过globalState自动更新）
+		if (shouldRefresh) {
+			// 刷新状态
 		}
 	}
 
@@ -316,27 +313,54 @@ const WebDAVModal = () => {
 		/>
 	)
 
-	// 返回按钮组件
-	const DismissPlayerSymbol = () => (
-		<TouchableOpacity
-			style={[styles.dismissSymbol, { top: insets.top + 10 }]}
-			onPress={() => router.back()}
-		>
-			<View style={styles.dismissBar} />
-		</TouchableOpacity>
-	)
+	// 如果没有服务器，显示添加服务器的引导信息
+	if (servers.length === 0) {
+		return (
+			<View style={[styles.container, { paddingTop: insets.top }]}>
+				<View style={styles.header}>
+					<Text style={styles.headerTitle}>WebDAV 服务器</Text>
+					<TouchableOpacity
+						style={styles.closeButton}
+						onPress={() => router.back()}
+						hitSlop={{ top: 10, right: 10, bottom: 10, left: 10 }}
+					>
+						<Ionicons name="close" size={24} color={colors.text} />
+					</TouchableOpacity>
+				</View>
 
-	// 加载指示器组件
-	const GlobalLoading = () => (
-		<View style={styles.loadingOverlay}>
-			<ActivityIndicator size="large" color={colors.loading} />
-		</View>
-	)
+				<View style={styles.emptyContainer}>
+					<Ionicons name="cloud-outline" size={80} color="#999" />
+					<Text style={styles.emptyTitle}>没有添加 WebDAV 服务器</Text>
+					<Text style={styles.emptySubtitle}>
+						添加一个 WebDAV 服务器来访问和播放您的云端音乐文件
+					</Text>
+					<TouchableOpacity style={styles.addButton} onPress={handleAddServer}>
+						<Ionicons name="add" size={24} color="#fff" />
+						<Text style={styles.addButtonText}>添加服务器</Text>
+					</TouchableOpacity>
+				</View>
+
+				<ServerEditModal
+					isVisible={modalVisible}
+					onClose={handleCloseModal}
+					initialServer={selectedServer}
+				/>
+			</View>
+		)
+	}
 
 	return (
 		<View style={[styles.container, { paddingTop: insets.top }]}>
-			<DismissPlayerSymbol />
-			<Text style={styles.header}>WebDAV服务器</Text>
+			<View style={styles.header}>
+				<Text style={styles.headerTitle}>WebDAV 服务器</Text>
+				<TouchableOpacity
+					style={styles.closeButton}
+					onPress={() => router.back()}
+					hitSlop={{ top: 10, right: 10, bottom: 10, left: 10 }}
+				>
+					<Ionicons name="close" size={24} color={colors.text} />
+				</TouchableOpacity>
+			</View>
 
 			<View style={styles.actionContainer}>
 				<TouchableOpacity style={styles.addButton} onPress={handleAddServer}>
@@ -361,11 +385,9 @@ const WebDAVModal = () => {
 
 			<ServerEditModal
 				isVisible={modalVisible}
-				onClose={handleModalClose}
+				onClose={handleCloseModal}
 				initialServer={selectedServer}
 			/>
-
-			{isLoading && <GlobalLoading />}
 		</View>
 	)
 }
@@ -376,11 +398,21 @@ const styles = StyleSheet.create({
 		backgroundColor: colors.background,
 	},
 	header: {
-		fontSize: 34,
-		fontWeight: 'bold',
+		flexDirection: 'row',
+		alignItems: 'center',
 		padding: 20,
 		paddingTop: 50,
+	},
+	headerTitle: {
+		fontSize: 34,
+		fontWeight: 'bold',
 		color: colors.text,
+	},
+	closeButton: {
+		position: 'absolute',
+		top: 0,
+		right: 0,
+		padding: 10,
 	},
 	actionContainer: {
 		padding: 20,
@@ -495,32 +527,6 @@ const styles = StyleSheet.create({
 		backgroundColor: colors.border,
 		marginVertical: 10,
 	},
-	dismissSymbol: {
-		position: 'absolute',
-		left: 0,
-		right: 0,
-		flexDirection: 'row',
-		justifyContent: 'center',
-		zIndex: 1,
-	},
-	dismissBar: {
-		width: 50,
-		height: 8,
-		borderRadius: 8,
-		backgroundColor: '#fff',
-		opacity: 0.7,
-	},
-	loadingOverlay: {
-		position: 'absolute',
-		top: 0,
-		bottom: 0,
-		left: 0,
-		right: 0,
-		backgroundColor: 'rgba(0, 0, 0, 0.5)',
-		justifyContent: 'center',
-		alignItems: 'center',
-		zIndex: 10,
-	},
 	modalOverlay: {
 		flex: 1,
 		justifyContent: 'center',
@@ -584,6 +590,17 @@ const styles = StyleSheet.create({
 	buttonText: {
 		color: '#fff',
 		fontWeight: 'bold',
+	},
+	emptyTitle: {
+		fontSize: 24,
+		fontWeight: 'bold',
+		color: colors.text,
+		marginBottom: 10,
+	},
+	emptySubtitle: {
+		fontSize: 16,
+		color: colors.subtext,
+		textAlign: 'center',
 	},
 })
 

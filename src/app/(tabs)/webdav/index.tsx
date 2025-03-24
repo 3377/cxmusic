@@ -45,12 +45,12 @@ const FileItem = ({ file, onPress, onLongPress }) => {
 			</View>
 			<View style={styles.fileInfo}>
 				<Text style={styles.fileName} numberOfLines={1}>
-					{file.basename}
+					{file.basename || '未知文件名'}
 				</Text>
 				<Text style={styles.fileDetails}>
 					{isDirectory
 						? '文件夹'
-						: `${(file.size / (1024 * 1024)).toFixed(2)} MB • ${new Date(file.lastmod).toLocaleDateString()}`}
+						: `${((file.size || 0) / (1024 * 1024)).toFixed(2)} MB • ${new Date(file.lastmod || Date.now()).toLocaleDateString()}`}
 				</Text>
 			</View>
 			{isDirectory && <Ionicons name="chevron-forward" size={20} color="#999" />}
@@ -172,24 +172,52 @@ const WebDAVScreen = () => {
 	// 播放音乐文件
 	const handlePlayFile = async (file: WebDAVFile) => {
 		try {
+			if (!file || !file.path) {
+				showToast('无效文件', 'error')
+				return
+			}
+
+			setIsLoading(true)
 			const musicItem = webdavFileToMusicItem(file)
+
+			if (!musicItem.url) {
+				showToast('文件URL无效', 'error')
+				return
+			}
+
 			await myTrackPlayer.play(musicItem)
-			showToast(`正在播放: ${file.basename}`, 'success')
+			showToast(`正在播放: ${file.basename || '未知文件'}`, 'success')
 		} catch (error) {
 			logError('播放文件失败:', error)
-			Alert.alert('错误', '无法播放文件')
+			Alert.alert('错误', `无法播放文件: ${error.message || '未知错误'}`)
+		} finally {
+			setIsLoading(false)
 		}
 	}
 
 	// 添加到播放队列
 	const handleAddToQueue = async (file: WebDAVFile) => {
 		try {
+			if (!file || !file.path) {
+				showToast('无效文件', 'error')
+				return
+			}
+
+			setIsLoading(true)
 			const musicItem = webdavFileToMusicItem(file)
+
+			if (!musicItem.url) {
+				showToast('文件URL无效', 'error')
+				return
+			}
+
 			await myTrackPlayer.add(musicItem)
-			showToast(`已添加到队列: ${file.basename}`, 'success')
+			showToast(`已添加到队列: ${file.basename || '未知文件'}`, 'success')
 		} catch (error) {
 			logError('添加到队列失败:', error)
-			Alert.alert('错误', '无法添加到队列')
+			Alert.alert('错误', `无法添加到队列: ${error.message || '未知错误'}`)
+		} finally {
+			setIsLoading(false)
 		}
 	}
 
@@ -205,20 +233,34 @@ const WebDAVScreen = () => {
 			// 获取当前目录下的所有音乐文件（不递归）
 			const musicFiles = await getAllMusicFiles(currentPath, false)
 
-			if (musicFiles.length === 0) {
+			if (!musicFiles || musicFiles.length === 0) {
 				Alert.alert('提示', '当前目录没有音乐文件')
 				return
 			}
 
 			// 转换为音乐项并播放
 			const musicItems = webdavFilesToMusicItems(musicFiles)
-			await myTrackPlayer.addAll(musicItems)
+
+			if (!musicItems || musicItems.length === 0) {
+				Alert.alert('提示', '无法识别音乐文件')
+				return
+			}
+
+			// 过滤掉无效的音乐项
+			const validMusicItems = musicItems.filter((item) => item && item.url)
+
+			if (validMusicItems.length === 0) {
+				Alert.alert('提示', '无有效的音乐文件可播放')
+				return
+			}
+
+			await myTrackPlayer.addAll(validMusicItems)
 			await myTrackPlayer.play()
 
-			showToast(`正在播放目录中的 ${musicFiles.length} 首音乐`, 'success')
+			showToast(`正在播放目录中的 ${validMusicItems.length} 首音乐`, 'success')
 		} catch (error) {
 			logError('播放目录音乐失败:', error)
-			Alert.alert('错误', '无法播放目录中的音乐')
+			Alert.alert('错误', `无法播放目录中的音乐: ${error.message || '未知错误'}`)
 		} finally {
 			setIsLoading(false)
 		}
