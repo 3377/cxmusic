@@ -142,14 +142,17 @@ export default function WebDavLayout() {
 	const router = useRouter()
 	const [isLoading, setIsLoading] = useState(true)
 	const [isInitialized, setIsInitialized] = useState(false)
+	const [initError, setInitError] = useState(null)
+	const [retryCount, setRetryCount] = useState(0)
 	const currentServer = useCurrentWebDAVServer()
 
 	// 初始化WebDAV服务
 	useEffect(() => {
 		const initWebDAV = async () => {
 			try {
-				logInfo('WebDAV布局: 开始初始化WebDAV服务')
+				logInfo(`WebDAV布局: 开始初始化WebDAV服务 (尝试 ${retryCount + 1})`)
 				setIsLoading(true)
+				setInitError(null)
 
 				// 等待WebDAV服务初始化
 				await setupWebDAV()
@@ -162,6 +165,7 @@ export default function WebDavLayout() {
 				}, 500)
 			} catch (error) {
 				logError('WebDAV布局: 初始化WebDAV服务失败', error)
+				setInitError(error.message || '初始化WebDAV服务失败')
 				setIsInitialized(true)
 				setIsLoading(false)
 			}
@@ -177,7 +181,7 @@ export default function WebDavLayout() {
 		return () => {
 			unsubscribe()
 		}
-	}, [])
+	}, [retryCount])
 
 	// 处理设置按钮点击
 	const handleSettingsPress = () => {
@@ -187,6 +191,70 @@ export default function WebDavLayout() {
 		} catch (error) {
 			logError('WebDAV布局: WebDAV设置导航错误', error)
 		}
+	}
+
+	// 处理重试初始化
+	const handleRetry = () => {
+		logInfo('WebDAV布局: 重试初始化WebDAV服务')
+		setRetryCount((prev) => prev + 1)
+	}
+
+	// 如果WebDAV服务初始化失败，显示错误信息和重试按钮
+	if (initError) {
+		return (
+			<View
+				style={{
+					flex: 1,
+					justifyContent: 'center',
+					alignItems: 'center',
+					backgroundColor: colors.background,
+					padding: 20,
+				}}
+			>
+				<Feather name="alert-triangle" size={48} color="red" />
+				<Text
+					style={{
+						marginTop: 16,
+						fontSize: 18,
+						fontWeight: 'bold',
+						color: colors.text,
+						textAlign: 'center',
+					}}
+				>
+					WebDAV服务初始化失败
+				</Text>
+				<Text
+					style={{
+						marginTop: 8,
+						color: colors.textMuted,
+						textAlign: 'center',
+						marginBottom: 20,
+					}}
+				>
+					{initError}
+				</Text>
+				<TouchableOpacity
+					onPress={handleRetry}
+					style={{
+						backgroundColor: colors.primary,
+						padding: 12,
+						borderRadius: 8,
+						marginBottom: 12,
+					}}
+				>
+					<Text style={{ color: '#fff', fontWeight: 'bold' }}>重试</Text>
+				</TouchableOpacity>
+				<TouchableOpacity
+					onPress={() => router.back()}
+					style={{
+						padding: 12,
+						borderRadius: 8,
+					}}
+				>
+					<Text style={{ color: colors.text }}>返回</Text>
+				</TouchableOpacity>
+			</View>
+		)
 	}
 
 	// 如果WebDAV服务未初始化完成，显示加载界面
@@ -211,7 +279,7 @@ export default function WebDavLayout() {
 				<Stack.Screen
 					name="index"
 					options={{
-						title: 'WebDAV文件',
+						title: currentServer?.name ? `WebDAV - ${currentServer.name}` : 'WebDAV文件',
 					}}
 				/>
 			</Stack>

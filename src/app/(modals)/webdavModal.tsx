@@ -8,6 +8,7 @@ import {
 	getCurrentWebDAVServer,
 	getWebDAVServers,
 	setDefaultWebDAVServer,
+	updateWebDAVServer,
 } from '@/helpers/webdavService'
 import { showToast } from '@/utils/utils'
 import { Feather, Ionicons } from '@expo/vector-icons'
@@ -77,6 +78,7 @@ class ErrorBoundary extends React.Component {
 const ServerEditModal = ({ isVisible, onClose, initialServer = null }) => {
 	const [name, setName] = useState('')
 	const [url, setUrl] = useState('')
+	const [isHttps, setIsHttps] = useState(true)
 	const [username, setUsername] = useState('')
 	const [password, setPassword] = useState('')
 	const [isDefault, setIsDefault] = useState(false)
@@ -89,24 +91,35 @@ const ServerEditModal = ({ isVisible, onClose, initialServer = null }) => {
 		return () => setIsComponentMounted(false)
 	}, [])
 
-	// 当初始服务器变化时，更新表单
+	// 当模态窗口显示时，初始化表单数据
 	useEffect(() => {
-		if (!isComponentMounted) return
-
 		try {
-			if (initialServer) {
-				setName(initialServer.name || '')
-				setUrl(initialServer.url || '')
-				setUsername(initialServer.username || '')
-				setPassword(initialServer.password || '')
-				setIsDefault(initialServer.isDefault || false)
-			} else {
-				// 重置表单
-				setName('')
-				setUrl('')
-				setUsername('')
-				setPassword('')
-				setIsDefault(false)
+			if (isVisible && isComponentMounted) {
+				if (initialServer) {
+					// 编辑现有服务器
+					setName(initialServer.name || '')
+
+					// 解析URL，提取协议和主机地址
+					let serverUrl = initialServer.url || ''
+					const isServerHttps = serverUrl.startsWith('https://')
+					setIsHttps(isServerHttps)
+
+					// 移除协议前缀
+					serverUrl = serverUrl.replace(/^https?:\/\//i, '')
+					setUrl(serverUrl)
+
+					setUsername(initialServer.username || '')
+					setPassword(initialServer.password || '')
+					setIsDefault(!!initialServer.isDefault)
+				} else {
+					// 添加新服务器
+					setName('')
+					setUrl('')
+					setIsHttps(true)
+					setUsername('')
+					setPassword('')
+					setIsDefault(false)
+				}
 			}
 		} catch (error) {
 			logError('更新服务器编辑表单失败:', error)
@@ -116,34 +129,68 @@ const ServerEditModal = ({ isVisible, onClose, initialServer = null }) => {
 	const handleSave = useCallback(async () => {
 		if (!isComponentMounted) return
 
-		if (!name || !url || !username) {
-			Alert.alert('错误', '服务器名称、URL和用户名不能为空')
+		if (!name || !url) {
+			Alert.alert('错误', '服务器名称和URL不能为空')
 			return
 		}
 
 		try {
 			setIsLoading(true)
 
-			// 创建服务器对象
-			const server: WebDAVServer = {
-				id: initialServer?.id || Date.now().toString(),
-				name: name.trim(),
-				url: url.trim(),
-				username: username.trim(),
-				password: password || '',
-				isDefault,
+			// 清理URL，先移除可能已有的协议前缀
+			let cleanUrl = url.trim()
+			cleanUrl = cleanUrl.replace(/^https?:\/\//i, '')
+
+			// 如果清理后为空
+			if (!cleanUrl) {
+				Alert.alert('错误', '请输入有效的服务器地址')
+				setIsLoading(false)
+				return
 			}
 
-			// 添加或更新服务器
-			const success = await addWebDAVServer(server)
+			// 构建完整URL，添加协议
+			const fullUrl = (isHttps ? 'https://' : 'http://') + cleanUrl
 
-			if (!isComponentMounted) return
+			// 验证URL格式
+			try {
+				new URL(fullUrl)
+			} catch (e) {
+				Alert.alert('错误', 'URL格式不正确，请检查')
+				setIsLoading(false)
+				return
+			}
 
-			if (success) {
-				showToast(`${initialServer ? '更新' : '添加'}服务器成功`, 'success')
-				onClose(true)
+			// 创建或更新服务器
+			if (initialServer) {
+				// 更新现有服务器
+				await updateWebDAVServer(initialServer.id, {
+					name: name.trim(),
+					url: fullUrl,
+					username: username.trim(),
+					password: password,
+					isDefault,
+				})
+
+				if (isComponentMounted) {
+					showToast('服务器更新成功', 'success')
+					onClose(true)
+				}
 			} else {
-				Alert.alert('错误', `${initialServer ? '更新' : '添加'}服务器失败，请检查连接信息`)
+				// 创建新服务器
+				const id = await addWebDAVServer({
+					name: name.trim(),
+					url: fullUrl,
+					username: username.trim(),
+					password: password,
+					isDefault,
+				})
+
+				if (isComponentMounted && id) {
+					showToast('服务器添加成功', 'success')
+					onClose(true)
+				} else {
+					Alert.alert('错误', '添加服务器失败')
+				}
 			}
 		} catch (error) {
 			logError(`${initialServer ? '更新' : '添加'}服务器失败:`, error)
@@ -158,7 +205,17 @@ const ServerEditModal = ({ isVisible, onClose, initialServer = null }) => {
 				setIsLoading(false)
 			}
 		}
-	}, [name, url, username, password, isDefault, initialServer, onClose, isComponentMounted])
+	}, [
+		name,
+		url,
+		isHttps,
+		username,
+		password,
+		isDefault,
+		initialServer,
+		onClose,
+		isComponentMounted,
+	])
 
 	// 安全地关闭模态窗口
 	const handleClose = useCallback(
@@ -197,15 +254,45 @@ const ServerEditModal = ({ isVisible, onClose, initialServer = null }) => {
 					/>
 
 					<Text style={styles.inputLabel}>URL</Text>
-					<TextInput
-						style={styles.input}
-						value={url}
-						onChangeText={setUrl}
-						placeholder="https://example.com/webdav/"
-						placeholderTextColor="#999"
-						autoCapitalize="none"
-						keyboardType="url"
-					/>
+					<View style={styles.urlInputContainer}>
+						<View style={styles.protocolSelector}>
+							<TouchableOpacity
+								style={[styles.protocolButton, isHttps ? styles.protocolButtonActive : null]}
+								onPress={() => setIsHttps(true)}
+							>
+								<Text
+									style={[
+										styles.protocolButtonText,
+										isHttps ? styles.protocolButtonTextActive : null,
+									]}
+								>
+									HTTPS
+								</Text>
+							</TouchableOpacity>
+							<TouchableOpacity
+								style={[styles.protocolButton, !isHttps ? styles.protocolButtonActive : null]}
+								onPress={() => setIsHttps(false)}
+							>
+								<Text
+									style={[
+										styles.protocolButtonText,
+										!isHttps ? styles.protocolButtonTextActive : null,
+									]}
+								>
+									HTTP
+								</Text>
+							</TouchableOpacity>
+						</View>
+						<TextInput
+							style={styles.urlInput}
+							value={url}
+							onChangeText={setUrl}
+							placeholder="example.com/webdav/"
+							placeholderTextColor="#999"
+							autoCapitalize="none"
+							keyboardType="url"
+						/>
+					</View>
 
 					<Text style={styles.inputLabel}>用户名</Text>
 					<TextInput
@@ -815,7 +902,7 @@ const styles = StyleSheet.create({
 		backgroundColor: 'rgba(0, 0, 0, 0.5)',
 	},
 	modalContent: {
-		width: '80%',
+		width: '90%',
 		backgroundColor: colors.background,
 		borderRadius: 10,
 		padding: 20,
@@ -840,6 +927,38 @@ const styles = StyleSheet.create({
 		fontSize: 14,
 		color: colors.text,
 		marginBottom: 5,
+	},
+	urlInputContainer: {
+		marginBottom: 15,
+	},
+	protocolSelector: {
+		flexDirection: 'row',
+		marginBottom: 8,
+	},
+	protocolButton: {
+		paddingVertical: 8,
+		paddingHorizontal: 12,
+		borderRadius: 5,
+		marginRight: 10,
+		backgroundColor: colors.item,
+	},
+	protocolButtonActive: {
+		backgroundColor: colors.accent,
+	},
+	protocolButtonText: {
+		fontSize: 14,
+		fontWeight: 'bold',
+		color: colors.text,
+	},
+	protocolButtonTextActive: {
+		color: '#fff',
+	},
+	urlInput: {
+		backgroundColor: colors.item,
+		borderRadius: 5,
+		paddingHorizontal: 15,
+		paddingVertical: 10,
+		color: colors.text,
 	},
 	switchContainer: {
 		flexDirection: 'row',
@@ -931,6 +1050,11 @@ const styles = StyleSheet.create({
 	retryButtonText: {
 		color: '#fff',
 		fontWeight: 'bold',
+	},
+	separator: {
+		height: 1,
+		backgroundColor: colors.border,
+		marginVertical: 10,
 	},
 })
 

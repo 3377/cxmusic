@@ -117,12 +117,17 @@ export async function setupWebDAV(): Promise<void> {
 		try {
 			const serversJson = await AsyncStorage.getItem(WEBDAV_SERVERS_KEY)
 			if (serversJson) {
-				const loadedServers = JSON.parse(serversJson)
-				if (Array.isArray(loadedServers)) {
-					servers = loadedServers
-					logInfo(`已加载${servers.length}个WebDAV服务器配置`)
-				} else {
-					logError('WebDAV服务器数据格式错误，重置为空列表')
+				try {
+					const loadedServers = JSON.parse(serversJson)
+					if (Array.isArray(loadedServers)) {
+						servers = loadedServers
+						logInfo(`已加载${servers.length}个WebDAV服务器配置`)
+					} else {
+						logError('WebDAV服务器数据格式错误，重置为空列表')
+						servers = []
+					}
+				} catch (parseError) {
+					logError('解析WebDAV服务器列表JSON失败:', parseError)
 					servers = []
 				}
 			} else {
@@ -149,7 +154,7 @@ export async function setupWebDAV(): Promise<void> {
 						await connectToServer(server)
 						logInfo(`成功连接到WebDAV服务器: ${server.name}`)
 					} catch (connectError) {
-						logError(`连接到默认WebDAV服务器失败: ${connectError.message}`)
+						logError(`连接到默认WebDAV服务器失败: ${connectError.message || '未知错误'}`)
 						// 连接失败，但不要抛出异常，允许用户稍后手动连接
 					}
 				} else {
@@ -163,7 +168,7 @@ export async function setupWebDAV(): Promise<void> {
 					await connectToServer(servers[0])
 					logInfo(`成功连接到第一个WebDAV服务器: ${servers[0].name}`)
 				} catch (connectError) {
-					logError(`连接到第一个WebDAV服务器失败: ${connectError.message}`)
+					logError(`连接到第一个WebDAV服务器失败: ${connectError.message || '未知错误'}`)
 					// 连接失败，但不要抛出异常，允许用户稍后手动连接
 				}
 			} else {
@@ -184,6 +189,7 @@ export async function setupWebDAV(): Promise<void> {
 		currentServer = null
 		servers = []
 		notifySubscribers()
+		throw error // 重新抛出错误以便上层处理
 	}
 }
 
@@ -224,7 +230,22 @@ export async function connectToServer(server: WebDAVServer): Promise<void> {
 			logInfo('WebDAV服务器连接测试成功')
 		} catch (testError) {
 			logError('WebDAV服务器连接测试失败:', testError)
-			throw new Error(`服务器连接测试失败: ${testError.message}`)
+			// 添加更具体的错误信息
+			let errorMessage = '服务器连接测试失败'
+
+			if (testError.status === 401) {
+				errorMessage = '授权失败: 请检查用户名和密码'
+			} else if (testError.status === 404) {
+				errorMessage = '服务器路径不存在: 请检查URL路径'
+			} else if (testError.message && testError.message.includes('ENOTFOUND')) {
+				errorMessage = '找不到服务器: 请检查主机名是否正确'
+			} else if (testError.message && testError.message.includes('ECONNREFUSED')) {
+				errorMessage = '连接被拒绝: 服务器可能未运行或端口被阻止'
+			} else if (testError.message && testError.message.includes('certificate')) {
+				errorMessage = 'SSL证书错误: 服务器证书无效或不受信任'
+			}
+
+			throw new Error(`${errorMessage}: ${testError.message || '未知错误'}`)
 		}
 
 		// 设置当前服务器和客户端

@@ -246,11 +246,14 @@ export default function WebDavScreen() {
 				// 获取当前服务器的客户端
 				const client = currentServer.client
 				if (!client) {
-					throw new Error('WebDAV客户端未初始化')
+					logError('WebDAV客户端未初始化，无法加载文件')
+					setError('未连接到WebDAV服务器，请检查服务器设置')
+					setIsLoading(false)
+					return
 				}
 
-				const contents = await client.getDirectoryContents(path)
-				if (Array.isArray(contents)) {
+				try {
+					const contents = await client.getDirectoryContents(path)
 					// 对文件进行排序：文件夹在前，文件在后，同类型按名称排序
 					const sortedContents = [...contents].sort((a, b) => {
 						if (a.type === 'directory' && b.type !== 'directory') return -1
@@ -260,15 +263,17 @@ export default function WebDavScreen() {
 
 					setFiles(sortedContents)
 					logInfo(`WebDAV文件加载完成，找到 ${sortedContents.length} 个项目`)
-				} else {
+				} catch (err) {
+					logError(`加载WebDAV目录内容失败 (${path}):`, err)
+					setError(`加载目录失败: ${err.message || '未知错误'}`)
 					setFiles([])
-					logInfo('WebDAV路径为空或返回了意外格式')
+				} finally {
+					setIsLoading(false)
 				}
 			} catch (err) {
-				logError('加载WebDAV文件失败:', err)
+				logError('加载WebDAV文件过程中发生错误:', err)
 				setError(err.message || '加载文件失败')
 				setFiles([])
-			} finally {
 				setIsLoading(false)
 			}
 		},
