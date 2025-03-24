@@ -26,16 +26,23 @@ jobs:
       run: |
         cd ios
         pod install
+        # 统一设置iOS部署目标版本为15.0
+        find . -name "*.pbxproj" -exec sed -i '' 's/IPHONEOS_DEPLOYMENT_TARGET = [0-9.]*;/IPHONEOS_DEPLOYMENT_TARGET = 15.0;/g' {} +
         cd ..
     
     - name: Build iOS app
       run: |
         cd ios
-        xcodebuild -workspace CyMusic.xcworkspace -scheme CyMusic -configuration Release -sdk iphoneos -derivedDataPath build -allowProvisioningUpdates
+        # 构建主应用
+        xcodebuild -workspace CyMusic.xcworkspace -scheme CyMusic -configuration Release -sdk iphoneos -derivedDataPath build -allowProvisioningUpdates -buildSettings IPHONEOS_DEPLOYMENT_TARGET=15.0
+        
+        # 构建ShareExtension
+        xcodebuild -workspace CyMusic.xcworkspace -scheme ShareExtension -configuration Release -sdk iphoneos -derivedDataPath build -allowProvisioningUpdates -buildSettings IPHONEOS_DEPLOYMENT_TARGET=15.0
         
         # Create IPA
         mkdir -p Payload
         cp -r build/Build/Products/Release-iphoneos/CyMusic.app Payload/
+        cp -r build/Build/Products/Release-iphoneos/ShareExtension.appex Payload/CyMusic.app/PlugIns/
         zip -r CyMusic.ipa Payload
         cd ..
     
