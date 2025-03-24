@@ -33,13 +33,10 @@ jobs:
     - name: Build iOS app
       run: |
         cd ios
-        # 构建主应用
-        xcodebuild -workspace CyMusic.xcworkspace -scheme CyMusic -configuration Release -sdk iphoneos -derivedDataPath build -allowProvisioningUpdates -buildSettings IPHONEOS_DEPLOYMENT_TARGET=15.0
+        # 构建主应用和ShareExtension
+        xcodebuild -workspace CyMusic.xcworkspace -scheme CyMusic -configuration Release -sdk iphoneos -derivedDataPath build CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGNING_IDENTITY="" CODE_SIGN_STYLE=Manual
         
-        # 构建ShareExtension
-        xcodebuild -workspace CyMusic.xcworkspace -scheme ShareExtension -configuration Release -sdk iphoneos -derivedDataPath build -allowProvisioningUpdates -buildSettings IPHONEOS_DEPLOYMENT_TARGET=15.0
-        
-        # Create IPA
+        # 创建IPA包
         mkdir -p Payload
         cp -r build/Build/Products/Release-iphoneos/CyMusic.app Payload/
         cp -r build/Build/Products/Release-iphoneos/ShareExtension.appex Payload/CyMusic.app/PlugIns/
