@@ -33,8 +33,14 @@ jobs:
     - name: Build iOS app
       run: |
         cd ios
-        # 构建主应用和ShareExtension
+        # 设置项目路径
+        export PROJECT_PATH=$(pwd)
+        
+        # 构建主应用
         xcodebuild -workspace CyMusic.xcworkspace -scheme CyMusic -configuration Release -sdk iphoneos -derivedDataPath build CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGNING_IDENTITY="" CODE_SIGN_STYLE=Manual
+        
+        # 构建ShareExtension
+        xcodebuild -workspace CyMusic.xcworkspace -scheme ShareExtension -configuration Release -sdk iphoneos -derivedDataPath build CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGNING_IDENTITY="" CODE_SIGN_STYLE=Manual
         
         # 创建IPA包
         mkdir -p Payload
