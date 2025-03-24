@@ -26,37 +26,21 @@ jobs:
       run: |
         cd ios
         pod install
-        # 统一设置iOS部署目标版本为15.0
-        find . -name "*.pbxproj" -exec sed -i '' 's/IPHONEOS_DEPLOYMENT_TARGET = [0-9.]*;/IPHONEOS_DEPLOYMENT_TARGET = 15.0;/g' {} +
-        cd ..
-    
-    - name: Fix project paths
-      run: |
-        cd ios
-        # 获取当前工作目录
-        CURRENT_PATH=$(pwd)
-        # 替换所有硬编码的本地路径
-        find . -type f -name "*.pbxproj" -exec sed -i '' "s|/Users/gyc/Code/music-player-master/ios|${CURRENT_PATH}|g" {} +
-        find . -type f -name "*.xcconfig" -exec sed -i '' "s|/Users/gyc/Code/music-player-master/ios|${CURRENT_PATH}|g" {} +
-        find . -type f -name "*.plist" -exec sed -i '' "s|/Users/gyc/Code/music-player-master/ios|${CURRENT_PATH}|g" {} +
         cd ..
     
     - name: Build iOS app
       run: |
         cd ios
-        # 设置项目路径
-        export PROJECT_PATH=$(pwd)
+        # 设置环境变量
+        export LANG=en_US.UTF-8
+        export LC_ALL=en_US.UTF-8
         
-        # 构建主应用
+        # 构建Release版本
         xcodebuild -workspace CyMusic.xcworkspace -scheme CyMusic -configuration Release -sdk iphoneos -derivedDataPath build CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGNING_IDENTITY="" CODE_SIGN_STYLE=Manual
-        
-        # 构建ShareExtension
-        xcodebuild -workspace CyMusic.xcworkspace -scheme ShareExtension -configuration Release -sdk iphoneos -derivedDataPath build CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGNING_IDENTITY="" CODE_SIGN_STYLE=Manual
         
         # 创建IPA包
         mkdir -p Payload
         cp -r build/Build/Products/Release-iphoneos/CyMusic.app Payload/
-        cp -r build/Build/Products/Release-iphoneos/ShareExtension.appex Payload/CyMusic.app/PlugIns/
         zip -r CyMusic.ipa Payload
         cd ..
     
