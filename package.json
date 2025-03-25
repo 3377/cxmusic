@@ -1,6 +1,7 @@
 {
 	"name": "music-player",
 	"version": "1.0.0",
+	"description": "A music player app with WebDAV support",
 	"main": "expo-router/entry",
 	"scripts": {
 		"android": "expo run:android",
