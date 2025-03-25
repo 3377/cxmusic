@@ -109,87 +109,108 @@ export async function setupWebDAV(): Promise<void> {
 	try {
 		logInfo('开始初始化WebDAV服务...')
 
-		// 重置状态
+		// 初始化连接状态
 		webdavClient = null
 		currentServer = null
 
-		// 从存储中加载服务器列表
+		// 设置超时保护
+		const timeoutPromise = new Promise((_, reject) => {
+			setTimeout(() => {
+				reject(new Error('初始化超时'))
+			}, 10000) // 10秒超时
+		})
+
+		// 尝试加载服务器列表
 		try {
-			const serversJson = await AsyncStorage.getItem(WEBDAV_SERVERS_KEY)
-			if (serversJson) {
-				try {
-					const loadedServers = JSON.parse(serversJson)
-					if (Array.isArray(loadedServers)) {
-						servers = loadedServers
-						logInfo(`已加载${servers.length}个WebDAV服务器配置`)
+			// 使用竞速模式加载服务器列表
+			await Promise.race([
+				(async () => {
+					const serversJson = await AsyncStorage.getItem(WEBDAV_SERVERS_KEY)
+					if (serversJson) {
+						try {
+							servers = JSON.parse(serversJson)
+							if (!Array.isArray(servers)) {
+								logError('WebDAV服务器数据格式错误，重置为空列表')
+								servers = []
+							}
+							logInfo(`已加载${servers.length}个WebDAV服务器配置`)
+						} catch (parseError) {
+							logError('解析WebDAV服务器列表JSON失败:', parseError)
+							servers = []
+						}
 					} else {
-						logError('WebDAV服务器数据格式错误，重置为空列表')
+						logInfo('无保存的WebDAV服务器配置')
 						servers = []
 					}
-				} catch (parseError) {
-					logError('解析WebDAV服务器列表JSON失败:', parseError)
-					servers = []
-				}
-			} else {
-				logInfo('无保存的WebDAV服务器配置')
-				servers = []
-			}
+				})(),
+				timeoutPromise,
+			])
 		} catch (loadError) {
 			logError('加载WebDAV服务器列表失败:', loadError)
+			// 即使加载失败，也继续执行，使用空列表
 			servers = []
 		}
 
-		// 加载当前服务器ID
-		try {
-			const currentId = await AsyncStorage.getItem(CURRENT_WEBDAV_SERVER_KEY)
-
-			// 如果有当前服务器ID，尝试找到并连接
-			if (currentId) {
-				const server = servers.find((s) => s.id === currentId)
-				if (server) {
-					logInfo(`尝试连接到上次使用的WebDAV服务器: ${server.name}`)
-
-					try {
-						// 尝试连接到服务器
-						await connectToServer(server)
-						logInfo(`成功连接到WebDAV服务器: ${server.name}`)
-					} catch (connectError) {
-						logError(`连接到默认WebDAV服务器失败: ${connectError.message || '未知错误'}`)
-						// 连接失败，但不要抛出异常，允许用户稍后手动连接
-					}
-				} else {
-					logInfo(`未找到ID为${currentId}的WebDAV服务器配置`)
-				}
-			} else if (servers.length > 0) {
-				// 如果没有当前服务器但有服务器列表，尝试连接到第一个
-				logInfo('尝试连接到第一个可用的WebDAV服务器')
-
+		// 如果有服务器配置，尝试连接到一个可用的服务器
+		if (servers.length > 0) {
+			try {
+				// 尝试获取当前服务器ID
+				let currentId: string | null = null
 				try {
-					await connectToServer(servers[0])
-					logInfo(`成功连接到第一个WebDAV服务器: ${servers[0].name}`)
-				} catch (connectError) {
-					logError(`连接到第一个WebDAV服务器失败: ${connectError.message || '未知错误'}`)
-					// 连接失败，但不要抛出异常，允许用户稍后手动连接
+					currentId = await AsyncStorage.getItem(CURRENT_WEBDAV_SERVER_KEY)
+				} catch (currentIdError) {
+					logError('加载当前WebDAV服务器ID失败:', currentIdError)
 				}
-			} else {
-				logInfo('无可用的WebDAV服务器配置')
+
+				// 尝试连接到上次使用的服务器
+				if (currentId) {
+					const server = servers.find((s) => s.id === currentId)
+					if (server) {
+						try {
+							logInfo(`尝试连接到上次使用的WebDAV服务器: ${server.name}`)
+							await connectToServer(server)
+							logInfo(`成功连接到WebDAV服务器: ${server.name}`)
+							notifySubscribers()
+							return
+						} catch (connectError) {
+							logError(`连接到默认WebDAV服务器失败: ${connectError.message || '未知错误'}`)
+							// 连接失败，继续尝试其他服务器
+						}
+					} else {
+						logInfo(`未找到ID为${currentId}的WebDAV服务器配置`)
+					}
+				}
+
+				// 如果没有指定的服务器或连接失败，尝试连接到第一个可用的服务器
+				if (servers.length > 0) {
+					try {
+						logInfo('尝试连接到第一个可用的WebDAV服务器')
+						await connectToServer(servers[0])
+						logInfo(`成功连接到第一个WebDAV服务器: ${servers[0].name}`)
+						notifySubscribers()
+						return
+					} catch (connectError) {
+						logError(`连接到第一个WebDAV服务器失败: ${connectError.message || '未知错误'}`)
+						// 所有尝试都失败，但继续执行
+					}
+				}
+			} catch (allFailedError) {
+				logError('连接到任何WebDAV服务器都失败:', allFailedError)
 			}
-		} catch (currentIdError) {
-			logError('加载当前WebDAV服务器ID失败:', currentIdError)
+		} else {
+			logInfo('无可用的WebDAV服务器配置')
 		}
 
-		// 通知订阅者更新
+		// 即使没有成功连接，也标记为初始化完成
 		notifySubscribers()
-
 		logInfo('WebDAV服务初始化完成')
 	} catch (error) {
 		logError('WebDAV服务初始化失败:', error)
-		// 确保在发生错误时设置安全的默认状态
+		// 重置状态
 		webdavClient = null
 		currentServer = null
-		servers = []
-		notifySubscribers()
-		throw error // 重新抛出错误以便上层处理
+		// 抛出异常以便上层捕获
+		throw error
 	}
 }
 
