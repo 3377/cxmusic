@@ -1,6 +1,8 @@
 import { PlaylistsListModal } from '@/components/PlaylistsListModal'
 import { colors } from '@/constants/tokens'
+import { loadingStore } from '@/helpers/loading'
 import { logError, logInfo } from '@/helpers/logger'
+import { PersistStatus } from '@/helpers/persistStatus'
 import { playListsStore } from '@/helpers/trackPlayerIndex'
 import { getCurrentWebDAVServer, getDirectoryContents, WebDAVFile } from '@/helpers/webdavService'
 import { formatBytes } from '@/utils/formatter'
@@ -21,6 +23,9 @@ import {
 	View,
 } from 'react-native'
 import TrackPlayer from 'react-native-track-player'
+import * as MediaLibrary from 'expo-media-library'
+import { Audio } from 'expo-av'
+import { Buffer } from 'buffer'
 
 // 格式化日期工具函数
 const formatDate = (dateString: string) => {
@@ -147,15 +152,136 @@ class ErrorCatcher extends React.Component {
 	}
 }
 
+// 支持的音频格式
+const SUPPORTED_AUDIO_FORMATS = ['mp3', 'm4a', 'wav', 'flac', 'aac']
+const MAX_FILE_SIZE = 100 * 1024 * 1024 // 100MB
+
+// 处理WebDAV URL
+const processWebDAVUrl = (baseUrl: string, filePath: string): string => {
+	try {
+		// 确保baseUrl没有尾随斜杠
+		let url = baseUrl.replace(/\/+$/, '')
+
+		// 处理文件路径
+		let processedPath = filePath
+			.split('/')
+			.map((segment) => encodeURIComponent(segment))
+			.join('/')
+
+		// 组合URL
+		url = `${url}${processedPath}`
+
+		// 确保是http或https
+		if (!url.startsWith('http')) {
+			url = `http://${url}`
+		}
+
+		return url
+	} catch (error) {
+		logError('处理WebDAV URL失败:', error)
+		throw new Error('无效的WebDAV URL')
+	}
+}
+
+// 验证音频文件
+const validateAudioFile = (file: WebDAVFile): boolean => {
+	try {
+		// 检查文件大小
+		if (file.size > MAX_FILE_SIZE) {
+			throw new Error('文件大小超过限制(100MB)')
+		}
+
+		// 检查文件格式
+		const extension = file.basename.split('.').pop()?.toLowerCase()
+		if (!extension || !SUPPORTED_AUDIO_FORMATS.includes(extension)) {
+			throw new Error('不支持的音频格式')
+		}
+
+		return true
+	} catch (error) {
+		logError('音频文件验证失败:', error)
+		throw error
+	}
+}
+
+// 清理缓存目录
+const cleanupCache = async () => {
+	try {
+		const cacheDir = `${FileSystem.cacheDirectory}webdav_cache/`
+		const cacheInfo = await FileSystem.getInfoAsync(cacheDir)
+
+		if (cacheInfo.exists) {
+			// 获取缓存目录内容
+			const files = await FileSystem.readDirectoryAsync(cacheDir)
+
+			// 获取每个文件的信息
+			const fileInfos = await Promise.all(
+				files.map(async (filename) => {
+					const filePath = `${cacheDir}${filename}`
+					const info = await FileSystem.getInfoAsync(filePath)
+					return {
+						path: filePath,
+						...info,
+						name: filename,
+						lastModified:
+							(await FileSystem.getInfoAsync(filePath, { md5: false })).modificationTime || 0,
+					}
+				}),
+			)
+
+			// 按最后修改时间排序
+			fileInfos.sort((a, b) => b.lastModified - a.lastModified)
+
+			// 如果缓存文件总数超过20个，删除旧的文件
+			if (fileInfos.length > 20) {
+				const filesToDelete = fileInfos.slice(20)
+				await Promise.all(
+					filesToDelete.map((file) => FileSystem.deleteAsync(file.path, { idempotent: true })),
+				)
+				logInfo('已清理旧的缓存文件')
+			}
+		}
+	} catch (error) {
+		logError('清理缓存失败:', error)
+	}
+}
+
+// 检查网络状态
+const checkNetworkStatus = async () => {
+	try {
+		const server = getCurrentWebDAVServer()
+		if (!server?.url) throw new Error('WebDAV服务器未配置')
+
+		const url = processWebDAVUrl(server.url, '/')
+		const authString = `${server.username}:${server.password}`
+		const base64Auth = btoa(authString)
+
+		const response = await fetch(url, {
+			method: 'HEAD',
+			headers: {
+				Authorization: `Basic ${base64Auth}`,
+			},
+		})
+
+		return response.ok
+	} catch (error) {
+		logError('网络检查失败:', error)
+		return false
+	}
+}
+
 // 缓存WebDAV音乐文件
 const cacheWebDAVFile = async (file: WebDAVFile) => {
 	try {
+		// 验证音频文件
+		validateAudioFile(file)
+
 		// 创建缓存目录
 		const cacheDir = `${FileSystem.cacheDirectory}webdav_cache/`
 		await FileSystem.makeDirectoryAsync(cacheDir, { intermediates: true }).catch(() => {})
 
 		// 生成缓存文件路径
-		const cacheFilePath = `${cacheDir}${file.basename}`
+		const cacheFilePath = `${cacheDir}${encodeURIComponent(file.basename)}`
 
 		// 检查是否已缓存
 		const cacheInfo = await FileSystem.getInfoAsync(cacheFilePath)
@@ -168,20 +294,147 @@ const cacheWebDAVFile = async (file: WebDAVFile) => {
 		const server = getCurrentWebDAVServer()
 		if (!server?.url) throw new Error('WebDAV服务器未配置')
 
-		const fileUrl = `${server.url}${file.filename}`
+		// 构建和处理WebDAV URL
+		const fileUrl = processWebDAVUrl(server.url, file.filename)
+
+		// 添加认证信息
+		const authString = `${server.username}:${server.password}`
+		const base64Auth = btoa(authString)
 
 		// 下载文件
 		logInfo('开始下载音乐文件:', file.basename)
-		await FileSystem.downloadAsync(fileUrl, cacheFilePath, {
+		const downloadResult = await FileSystem.downloadAsync(fileUrl, cacheFilePath, {
 			headers: {
-				Authorization: `Basic ${btoa(`${server.username}:${server.password}`)}`,
+				Authorization: `Basic ${base64Auth}`,
 			},
+		}).catch((error) => {
+			logError('下载失败:', error)
+			throw new Error('文件下载失败: ' + (error.message || '未知错误'))
 		})
+
+		if (downloadResult.status !== 200) {
+			throw new Error(`下载失败: HTTP ${downloadResult.status}`)
+		}
+
+		// 验证下载的文件
+		const downloadedFileInfo = await FileSystem.getInfoAsync(cacheFilePath)
+		if (!downloadedFileInfo.exists || downloadedFileInfo.size === 0) {
+			await FileSystem.deleteAsync(cacheFilePath).catch(() => {})
+			throw new Error('下载的文件无效')
+		}
 
 		logInfo('音乐文件下载完成:', file.basename)
 		return cacheFilePath
 	} catch (error) {
 		logError('缓存WebDAV文件失败:', error)
+		throw error
+	}
+}
+
+// 播放状态持久化
+const savePlaybackState = async (musicItem: any, position: number) => {
+	try {
+		await PersistStatus.set('webdav.lastPlayed', {
+			musicItem,
+			position,
+			timestamp: Date.now(),
+		})
+	} catch (error) {
+		logError('保存播放状态失败:', error)
+	}
+}
+
+// 获取上次播放状态
+const getLastPlaybackState = async () => {
+	try {
+		return await PersistStatus.get('webdav.lastPlayed')
+	} catch (error) {
+		logError('获取上次播放状态失败:', error)
+		return null
+	}
+}
+
+// 显示加载进度
+const showLoadingProgress = (message: string, progress?: number) => {
+	// 使用全局loading状态管理
+	if (progress !== undefined) {
+		loadingStore.setValue({
+			visible: true,
+			message,
+			progress,
+		})
+	} else {
+		loadingStore.setValue({
+			visible: true,
+			message,
+		})
+	}
+}
+
+// 隐藏加载进度
+const hideLoadingProgress = () => {
+	loadingStore.setValue({
+		visible: false,
+	})
+}
+
+// 检查音频格式兼容性
+const checkAudioCompatibility = async (file: WebDAVFile) => {
+	const extension = file.basename.split('.').pop()?.toLowerCase()
+
+	// 检查是否需要转换
+	if (extension === 'flac') {
+		showToast('提示', 'FLAC格式可能需要转换，播放可能需要较长时间', 'info')
+	}
+
+	return true
+}
+
+// 解析音频元数据
+const parseAudioMetadata = async (filePath: string) => {
+	try {
+		// 获取音频文件信息
+		const asset = await MediaLibrary.createAssetAsync(filePath)
+		
+		return {
+			title: asset.filename.replace(/\.[^/.]+$/, ''),
+			artist: asset.artist || 'WebDAV音乐',
+			album: asset.album || 'WebDAV专辑',
+			duration: asset.duration || 0,
+			artwork: asset.uri,
+		}
+	} catch (error) {
+		logError('解析音频元数据失败:', error)
+		return null
+	}
+}
+
+// 流式播放处理
+const handleStreamingPlayback = async (file: WebDAVFile) => {
+	try {
+		const server = getCurrentWebDAVServer()
+		if (!server?.url) throw new Error('WebDAV服务器未配置')
+		
+		const fileUrl = processWebDAVUrl(server.url, file.filename)
+		const authString = `${server.username}:${server.password}`
+		const base64Auth = btoa(authString)
+		
+		// 创建音频对象
+		const { sound, status } = await Audio.Sound.createAsync(
+			{ uri: fileUrl, headers: { Authorization: `Basic ${base64Auth}` } },
+			{ shouldPlay: true, progressUpdateIntervalMillis: 1000 },
+			(status) => {
+				if (status.isLoaded) {
+					// 更新播放进度
+					const progress = status.positionMillis / status.durationMillis
+					showLoadingProgress(`正在播放: ${Math.round(progress * 100)}%`, progress)
+				}
+			},
+		)
+		
+		return { sound, status }
+	} catch (error) {
+		logError('流式播放失败:', error)
 		throw error
 	}
 }
@@ -192,79 +445,291 @@ const playWebDavTrack = async (file: WebDAVFile) => {
 		if (!file) throw new Error('无效的音乐文件')
 
 		logInfo('准备播放WebDAV音乐:', file.basename)
+		
+		// 显示加载提示
+		showLoadingProgress('正在检查网络连接...')
+		
+		// 检查网络状态
+		const isNetworkAvailable = await checkNetworkStatus()
+		if (!isNetworkAvailable) {
+			throw new Error('无法连接到WebDAV服务器，请检查网络连接')
+		}
 
-		// 缓存文件
-		const cachedFilePath = await cacheWebDAVFile(file)
+		// 检查音频兼容性
+		showLoadingProgress('正在检查文件兼容性...')
+		await checkAudioCompatibility(file)
 
-		// 创建音乐项
-		const musicItem = {
-			id: `webdav-${Date.now()}`,
-			url: cachedFilePath,
-			title: file.basename.replace(/\.[^/.]+$/, ''), // 移除扩展名
-			artist: 'WebDAV音乐',
-			artwork: '',
-			platform: 'webdav',
-			duration: 0,
+		// 清理旧的缓存文件
+		showLoadingProgress('正在清理缓存...')
+		await cleanupCache()
+
+		let musicItem
+		let cachedFilePath
+
+		// 尝试流式播放
+		try {
+			showLoadingProgress('正在准备流式播放...')
+			const { sound, status } = await handleStreamingPlayback(file)
+			
+			if (status.isLoaded) {
+				// 创建音乐项（流式播放）
+				musicItem = {
+					id: `webdav-${Date.now()}`,
+					url: status.uri,
+					title: file.basename.replace(/\.[^/.]+$/, ''),
+					artist: 'WebDAV音乐',
+					artwork: '',
+					platform: 'webdav',
+					duration: status.durationMillis / 1000,
+					size: file.size,
+					format: file.basename.split('.').pop()?.toLowerCase(),
+					isStreaming: true,
+					sound, // 保存sound对象以便控制
+				}
+			} else {
+				throw new Error('流式播放初始化失败')
+			}
+		} catch (streamError) {
+			logError('流式播放失败，尝试缓存播放:', streamError)
+			
+			// 回退到缓存播放
+			showLoadingProgress('正在准备音乐文件...', 0)
+			cachedFilePath = await cacheWebDAVFile(file)
+			if (!cachedFilePath) throw new Error('文件缓存失败')
+			
+			// 解析元数据
+			const metadata = await parseAudioMetadata(cachedFilePath)
+			
+			// 创建音乐项（缓存播放）
+			musicItem = {
+				id: `webdav-${Date.now()}`,
+				url: `file://${cachedFilePath}`,
+				title: metadata?.title || file.basename.replace(/\.[^/.]+$/, ''),
+				artist: metadata?.artist || 'WebDAV音乐',
+				album: metadata?.album || 'WebDAV专辑',
+				artwork: metadata?.artwork || '',
+				platform: 'webdav',
+				duration: metadata?.duration || 0,
+				size: file.size,
+				format: file.basename.split('.').pop()?.toLowerCase(),
+			}
 		}
 
 		// 播放音乐
 		try {
-			await TrackPlayer.reset()
-			await TrackPlayer.add(musicItem)
-			await TrackPlayer.play()
+			showLoadingProgress('正在初始化播放器...')
+			
+			if (musicItem.isStreaming) {
+				// 使用Expo Audio API播放
+				await musicItem.sound.playAsync()
+			} else {
+				// 使用TrackPlayer播放
+				await TrackPlayer.reset()
+				
+				// 设置播放选项
+				await TrackPlayer.updateOptions({
+					capabilities: [
+						TrackPlayer.CAPABILITY_PLAY,
+						TrackPlayer.CAPABILITY_PAUSE,
+						TrackPlayer.CAPABILITY_STOP,
+						TrackPlayer.CAPABILITY_SEEK_TO,
+					],
+					compactCapabilities: [
+						TrackPlayer.CAPABILITY_PLAY,
+						TrackPlayer.CAPABILITY_PAUSE,
+					],
+					progressUpdateEventInterval: 1,
+				})
+				
+				// 获取上次播放状态
+				const lastState = await getLastPlaybackState()
+				
+				await TrackPlayer.add(musicItem)
+				
+				// 设置播放模式和选项
+				await TrackPlayer.setRepeatMode(0) // 不循环播放
+				await TrackPlayer.setVolume(1.0)
+				
+				// 如果是同一首歌，恢复上次播放位置
+				if (lastState?.musicItem?.id === musicItem.id) {
+					await TrackPlayer.seekTo(lastState.position)
+				}
+				
+				// 注册播放器事件监听
+				const events = [
+					'playback-state',
+					'playback-error',
+					'playback-track-changed',
+					'playback-queue-ended',
+					'playback-progress-updated',
+				]
+				
+				events.forEach(event => {
+					TrackPlayer.addEventListener(event, async (data) => {
+						switch (event) {
+							case 'playback-state':
+								logInfo('播放状态变化:', data)
+								break
+							case 'playback-error':
+								logError('播放错误:', data)
+								showToast('错误', '音乐播放失败，请检查文件格式是否支持', 'error')
+								if (cachedFilePath) {
+									await FileSystem.deleteAsync(cachedFilePath).catch(() => {})
+								}
+								break
+							case 'playback-track-changed':
+								logInfo('切换到新的音轨:', data)
+								break
+							case 'playback-queue-ended':
+								logInfo('播放队列结束')
+								break
+							case 'playback-progress-updated':
+								// 保存播放进度
+								await savePlaybackState(musicItem, data.position)
+								break
+						}
+					})
+				})
+				
+				// 开始播放
+				await TrackPlayer.play()
+			}
+			
+			logInfo('开始播放:', musicItem)
+			
+			// 隐藏加载提示
+			hideLoadingProgress()
+			
+			// 显示播放成功提示
+			showToast('提示', '开始播放音乐', 'success')
+			
+			// 定期更新播放进度
+			const progressInterval = setInterval(async () => {
+				try {
+					if (musicItem.isStreaming) {
+						const status = await musicItem.sound.getStatusAsync()
+						if (status.isLoaded && status.durationMillis > 0) {
+							const progress = status.positionMillis / status.durationMillis
+							showLoadingProgress(`正在播放: ${Math.round(progress * 100)}%`, progress)
+						}
+					} else {
+						const position = await TrackPlayer.getPosition()
+						const duration = await TrackPlayer.getDuration()
+						logInfo('播放进度:', { position, duration })
+						
+						if (duration > 0) {
+							const progress = position / duration
+							showLoadingProgress(`正在播放: ${Math.round(progress * 100)}%`, progress)
+						}
+					}
+				} catch (error) {
+					logError('获取播放进度失败:', error)
+					clearInterval(progressInterval)
+				}
+			}, 1000)
+			
+			// 清理定时器和资源
+			const cleanup = async () => {
+				clearInterval(progressInterval)
+				hideLoadingProgress()
+				
+				if (musicItem.isStreaming) {
+					await musicItem.sound.unloadAsync()
+				}
+				
+				if (cachedFilePath) {
+					await FileSystem.deleteAsync(cachedFilePath).catch(() => {})
+				}
+			}
+			
+			if (musicItem.isStreaming) {
+				musicItem.sound.setOnPlaybackStatusUpdate((status) => {
+					if (status.didJustFinish) {
+						cleanup()
+					}
+				})
+			} else {
+				TrackPlayer.addEventListener('playback-queue-ended', cleanup)
+			}
 
-			logInfo('正在播放WebDAV音乐:', file.basename)
 		} catch (playerError) {
-			logError('TrackPlayer操作失败:', playerError)
-			Alert.alert('播放错误', '音乐播放器初始化失败，请稍后重试')
+			logError('播放器操作失败:', playerError)
+			showToast('错误', '音乐播放器初始化失败，请稍后重试', 'error')
+			
+			// 清理资源
+			if (musicItem.isStreaming) {
+				await musicItem.sound.unloadAsync()
+			}
+			if (cachedFilePath) {
+				await FileSystem.deleteAsync(cachedFilePath).catch(() => {})
+			}
+			
+			// 隐藏加载提示
+			hideLoadingProgress()
 		}
 	} catch (error) {
 		logError('播放WebDAV音乐失败:', error)
-		Alert.alert('错误', '无法播放此音乐文件')
+		showToast('错误', `无法播放此音乐文件: ${error.message || '未知错误'}`, 'error')
+		
+		// 隐藏加载提示
+		hideLoadingProgress()
 	}
 }
 
 // 将WebDAV文件添加到播放列表的函数
-const addToPlaylist = async (file: WebDAVFile, playlist: IMusic.PlayList) => {
+const addToPlaylist = async (file: WebDAVFile, playlist: any) => {
 	try {
-		if (!file) throw new Error('无效的音乐文件')
-
-		logInfo('准备添加到播放列表:', file.basename)
-
+		// 显示加载提示
+		showLoadingProgress('正在添加到播放列表...')
+		
 		// 缓存文件
 		const cachedFilePath = await cacheWebDAVFile(file)
-
+		if (!cachedFilePath) throw new Error('文件缓存失败')
+		
+		// 解析元数据
+		const metadata = await parseAudioMetadata(cachedFilePath)
+		
 		// 创建音乐项
-		const musicItem: IMusic.IMusicItem = {
+		const musicItem = {
 			id: `webdav-${Date.now()}`,
-			url: cachedFilePath,
-			title: file.basename.replace(/\.[^/.]+$/, ''), // 移除扩展名
-			artist: 'WebDAV音乐',
-			artwork: '',
+			url: `file://${cachedFilePath}`,
+			title: metadata?.title || file.basename.replace(/\.[^/.]+$/, ''),
+			artist: metadata?.artist || 'WebDAV音乐',
+			album: metadata?.album || 'WebDAV专辑',
+			artwork: metadata?.artwork || '',
+			duration: metadata?.duration || 0,
 			platform: 'webdav',
-			duration: 0,
+			size: file.size,
+			format: file.basename.split('.').pop()?.toLowerCase(),
 		}
-
-		// 添加到播放列表
-		const nowPlayLists = playListsStore.getValue() || []
-		const updatedPlayLists = nowPlayLists.map((existingPlaylist) => {
-			if (existingPlaylist.id === playlist.id) {
+		
+		// 获取当前播放列表
+		const currentPlaylists = playListsStore.getValue() || []
+		
+		// 更新播放列表
+		const updatedPlaylists = currentPlaylists.map((p) => {
+			if (p.id === playlist.id) {
 				return {
-					...existingPlaylist,
-					songs: [...existingPlaylist.songs, musicItem],
+					...p,
+					songs: [...p.songs, musicItem],
 				}
 			}
-			return existingPlaylist
+			return p
 		})
-
-		playListsStore.setValue(updatedPlayLists)
-		PersistStatus.set('music.playLists', updatedPlayLists)
-
-		logInfo('已添加到播放列表:', file.basename)
-		Alert.alert('提示', '已添加到播放列表')
+		
+		// 保存更新后的播放列表
+		playListsStore.setValue(updatedPlaylists)
+		await PersistStatus.set('music.playLists', updatedPlaylists)
+		
+		// 显示成功提示
+		showToast('成功', '已添加到播放列表', 'success')
+		
+		// 隐藏加载提示
+		hideLoadingProgress()
 	} catch (error) {
 		logError('添加到播放列表失败:', error)
-		Alert.alert('错误', '无法添加到播放列表')
+		showToast('错误', `添加失败: ${error.message || '未知错误'}`, 'error')
+		hideLoadingProgress()
 	}
 }
 
