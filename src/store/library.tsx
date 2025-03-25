@@ -4,6 +4,7 @@ import { useEffect } from 'react'
 import { Track } from 'react-native-track-player'
 import { create } from 'zustand'
 
+import { hideLoading, setLoadingError, showLoading, useLoading } from '@/helpers/loading'
 import { getTopLists } from '@/helpers/userApi/getMusicSource'
 import PersistStatus from '@/store/PersistStatus'
 
@@ -13,14 +14,13 @@ interface LibraryState {
 	favorites: IMusic.IMusicItem[]
 	nowLyric: string
 	playlists: Playlist[]
-	isLoading: boolean
+	page: number
+	hasMore: boolean
 	toggleTrackFavorite: (track: Track) => void
 	addToPlaylist: (track: Track, playlistName: string) => void
 	fetchTracks: (refresh?: boolean) => Promise<void>
 	setNowLyric: (lyric: string) => void
 	setPlayList: (newPlayList?: Playlist[]) => void
-	page: number
-	hasMore: boolean
 	// getMusicIndex: (musicItem?: IMusic.IMusicItem | null) => number
 	// isInPlayList: (musicItem?: IMusic.IMusicItem | null) => boolean
 	// getPlayListMusicAt: (index: number) => IMusic.IMusicItem | null
@@ -55,7 +55,6 @@ const mapTrack = (track: {
 export const useLibraryStore = create<LibraryState>((set, get) => ({
 	allTracks: [],
 	tracks: [],
-	isLoading: false,
 	page: 1,
 	hasMore: true,
 	favorites: PersistStatus.get('music.favorites') || [],
@@ -67,16 +66,11 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
 			const index = favorites.findIndex((fav) => fav.id === track.id)
 
 			if (index !== -1) {
-				// 如果存在，则从数组中删除
 				favorites.splice(index, 1)
 			} else {
-				// 如果不存在，则添加到数组中
 				favorites.push(track as IMusic.IMusicItem)
 			}
-			// 更新持久化存储中的favorites
 			PersistStatus.set('music.favorites', favorites)
-
-			// 返回新的状态
 			return { favorites }
 		})
 	},
@@ -93,24 +87,20 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
 			}),
 		})),
 	fetchTracks: async (refresh = false) => {
-		const { page, hasMore, isLoading, allTracks } = get()
+		const { page, hasMore } = get()
+		const { isLoading } = useLoading('library')
 		if (isLoading || (!hasMore && !refresh)) return
 		const PAGE_SIZE = 100
 
 		try {
-			if (refresh || allTracks.length === 0) {
-				// 只在刷新或首次加载时请求数据
-				set({ isLoading: true })
-
+			if (refresh || get().allTracks.length === 0) {
+				showLoading('正在加载音乐列表...', { type: 'library' })
 				const data = await musicSdk['tx'].leaderboard.getList(26, 1)
 				const mappedTracks = data.list.map(mapTrack)
-				// console.log(mappedTracks.length)
 				set({ allTracks: mappedTracks })
 			}
-			set({ isLoading: true })
-			// // 延时
-			// await new Promise((resolve) => setTimeout(resolve, 5000))
-			// console.log(isLoading)
+
+			showLoading('正在处理音乐数据...', { type: 'library' })
 			const currentPage = refresh ? 1 : page
 			const start = (currentPage - 1) * PAGE_SIZE
 			const end = start + PAGE_SIZE
@@ -120,11 +110,11 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
 				tracks: refresh ? newTracks : [...state.tracks, ...newTracks],
 				page: currentPage + 1,
 				hasMore: end < get().allTracks.length,
-				isLoading: false,
 			}))
+			hideLoading('library')
 		} catch (error) {
-			console.error('Failed to fetch tracks:', error)
-			set({ isLoading: false })
+			console.error('加载音乐列表失败:', error)
+			setLoadingError('加载音乐列表失败: ' + (error.message || '未知错误'), 'library')
 		}
 	},
 	setNowLyric: (nowLyric: string) => {
@@ -132,6 +122,7 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
 	},
 	setPlayList: async (newPlayList?) => {
 		try {
+			showLoading('正在加载播放列表...', { type: 'library' })
 			const playlists = await getTopLists()
 			const combinedData = playlists.flatMap((group) =>
 				group.data.map((playlist) => ({
@@ -140,8 +131,10 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
 				})),
 			)
 			set({ playlists: combinedData })
+			hideLoading('library')
 		} catch (error) {
-			console.error('Failed to set playlist:', error)
+			console.error('加载播放列表失败:', error)
+			setLoadingError('加载播放列表失败: ' + (error.message || '未知错误'), 'library')
 		}
 	},
 	// getMusicIndex: (musicItem) => {
@@ -233,5 +226,8 @@ export const usePlaylists = () => {
 	return { playlists, setPlayList }
 }
 export const useTracksLoading = () => {
-	return useLibraryStore((state) => state.isLoading)
+	const { isLoading } = useLoading('library')
+	return isLoading
 }
+
+export default useLibraryStore
