@@ -221,7 +221,16 @@ export default function WebDavLayout() {
 			if (isLoading) return // 防止加载中点击
 
 			logInfo('WebDAV布局: 打开WebDAV设置')
-			router.push('/webdavModal')
+			
+			// 使用setTimeout避免过快导航可能引起的闪退
+			setTimeout(() => {
+				try {
+					router.push('/webdavModal')
+				} catch (navError) {
+					logError('WebDAV布局: 导航到WebDAV设置失败', navError)
+					Alert.alert('错误', '无法打开WebDAV设置，请重试')
+				}
+			}, 100)
 		} catch (error) {
 			logError('WebDAV布局: 导航到WebDAV设置失败', error)
 			Alert.alert('错误', '无法打开WebDAV设置，请重试')
@@ -319,22 +328,25 @@ export default function WebDavLayout() {
 
 	// 正常渲染WebDAV页面
 	return (
-		<ErrorBoundary>
+		<ErrorBoundary router={router}>
 			<Stack
 				screenOptions={{
+					headerShown: true,
 					headerStyle: {
 						backgroundColor: colors.background,
 					},
-					headerTintColor: colors.text,
-					headerRight: () => <SafeHeaderButton onPress={handleSettingsPress} />,
 					headerTitleStyle: {
 						color: colors.text,
 					},
+					headerTintColor: colors.primary,
 					contentStyle: {
 						backgroundColor: colors.background,
 					},
+					headerRight: () => <SafeHeaderButton onPress={handleSettingsPress} />,
 				}}
-			/>
+			>
+				<Stack.Screen name="index" options={{ title: 'WebDAV 云音乐' }} />
+			</Stack>
 		</ErrorBoundary>
 	)
 }

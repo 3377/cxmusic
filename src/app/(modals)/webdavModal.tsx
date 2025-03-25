@@ -665,11 +665,12 @@ const WebDAVModal = () => {
 
 			safeAction(
 				async () => {
-					const success = await connectToServer(server)
-					if (!success) {
-						throw new Error('连接测试失败')
+					try {
+						await connectToServer(server)
+						return true
+					} catch (error) {
+						throw new Error(`连接测试失败: ${error.message || '未知错误'}`)
 					}
-					return success
 				},
 				'连接测试成功',
 				'连接测试失败',
@@ -913,7 +914,16 @@ const WebDAVModal = () => {
 					) : (
 						<FlatList
 							data={servers}
-							renderItem={renderItem}
+							renderItem={({ item }) => (
+								<ServerItem
+									server={item}
+									onEdit={handleEditServer}
+									onDelete={handleDeleteServer}
+									onSetDefault={handleSetDefault}
+									onTest={handleTestServer}
+									isCurrentServer={currentServerState?.id === item.id}
+								/>
+							)}
 							keyExtractor={(item) => item?.id || Math.random().toString()}
 							contentContainerStyle={styles.listContainer}
 							ItemSeparatorComponent={() => <View style={styles.separator} />}

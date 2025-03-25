@@ -226,7 +226,13 @@ export async function connectToServer(server: WebDAVServer): Promise<void> {
 		}
 
 		// 创建WebDAV客户端
-		const client = createClient(server.url, clientOptions)
+		let client;
+		try {
+			client = createClient(server.url, clientOptions)
+		} catch (clientError) {
+			logError('创建WebDAV客户端失败:', clientError)
+			throw new Error(`创建WebDAV客户端失败: ${clientError.message || '未知错误'}`)
+		}
 
 		if (!client) {
 			throw new Error('WebDAV客户端创建失败')
@@ -253,7 +259,7 @@ export async function connectToServer(server: WebDAVServer): Promise<void> {
 				errorMessage = 'SSL证书错误: 服务器证书无效或不受信任'
 			}
 
-			throw new Error(`${errorMessage}: ${testError.message || '未知错误'}`)
+			throw new Error(errorMessage)
 		}
 
 		// 设置当前服务器和客户端

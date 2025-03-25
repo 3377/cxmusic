@@ -7,8 +7,9 @@ alwaysApply: true
 
 - Windows11系统，cursor编辑器，git bash命令运行终端
 - 需要打包的目标操作系统：iOS 15 及以上版本
-- 需要通过 GitHub Actions 远程构建，生成适用于ios15及以上的ipa包
-- 个人手机已经越狱，可以不用考虑签名问题
+- 一定记住我是通过 GitHub Actions 远程构建，生成适用于ios15及以上的ipa包，不用考虑本地测试问题
+- 手机已经越狱，不用考虑签名问题
+- 每次cursor编辑器修改完代码后请你自动提交，自动push
 # 1.2 项目的技术栈
 - React Native：跨平台移动应用开发框架
 - Expo：简化 React Native 开发的工具和服务平台

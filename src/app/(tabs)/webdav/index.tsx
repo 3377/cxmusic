@@ -227,6 +227,13 @@ export default function WebDavScreen() {
 	const [error, setError] = useState(null)
 	const [refreshKey, setRefreshKey] = useState(0) // 用于强制刷新
 	const [pathHistory, setPathHistory] = useState([]) // 路径历史，用于返回
+	const [isMounted, setIsMounted] = useState(true)
+
+	// 组件挂载状态管理
+	useEffect(() => {
+		setIsMounted(true)
+		return () => setIsMounted(false)
+	}, [])
 
 	// 添加返回键处理
 	useEffect(() => {
@@ -243,78 +250,71 @@ export default function WebDavScreen() {
 
 	// 安全的文件加载函数 - 使用简单的超时处理
 	const safeLoadFiles = useCallback(async (path) => {
+		if (!isMounted) return // 如果组件已卸载，不执行操作
+		
 		setIsLoading(true)
 		setError(null)
 
 		let timeoutId = null
 		let loadPromiseResolved = false
 
-		try {
-			// 设置超时保护
+		const timeoutPromise = new Promise((_, reject) => {
 			timeoutId = setTimeout(() => {
-				if (!loadPromiseResolved) {
-					throw new Error('加载文件超时，请检查网络连接')
+				if (!loadPromiseResolved && isMounted) {
+					reject(new Error('获取文件列表超时，请检查网络连接'))
 				}
-			}, 15000)
+			}, 10000) // 10秒超时
+		})
 
-			// 先检查当前服务器
-			const server = await getCurrentWebDAVServer()
-			if (!server) {
-				throw new Error('未配置WebDAV服务器')
-			}
+		try {
+			// 使用Promise.race来处理超时
+			const filesData = await Promise.race([
+				getDirectoryContents(path, { onlyMusic: false }),
+				timeoutPromise,
+			])
 
-			// 验证WebDAV连接
-			const isConnected = await verifyWebDAVConnection(server)
-			if (!isConnected) {
-				throw new Error('无法连接到WebDAV服务器，请检查设置')
-			}
-
-			// 加载文件
-			const filesList = await getDirectoryContents(path)
 			loadPromiseResolved = true
+			clearTimeout(timeoutId)
 
-			// 对文件进行排序 - 目录在前，文件在后
-			const sortedFiles = [...filesList].sort((a, b) => {
-				// 先按类型排序（目录在前）
-				if (a.type !== b.type) {
-					return a.type === 'directory' ? -1 : 1
-				}
-				// 再按名称字母顺序排序
-				return a.basename.localeCompare(b.basename)
-			})
+			if (isMounted) {
+				const sortedFiles = [...filesData].sort((a, b) => {
+					// 文件夹优先
+					if (a.type === 'directory' && b.type !== 'directory') return -1
+					if (a.type !== 'directory' && b.type === 'directory') return 1
 
-			// 过滤出非隐藏文件（不以.开头）
-			const visibleFiles = sortedFiles.filter((file) => !file.basename.startsWith('.'))
+					// 按文件名排序
+					return a.basename.localeCompare(b.basename)
+				})
 
-			setFiles(visibleFiles)
-			setIsLoading(false)
-		} catch (error) {
-			let errorMessage = '加载文件失败'
-
-			// 根据错误类型提供更具体的错误信息
-			if (error.status === 401) {
-				errorMessage = '授权失败: 请检查用户名和密码'
-			} else if (error.status === 404) {
-				errorMessage = '路径不存在: ' + path
-			} else if (error.message && error.message.includes('timeout')) {
-				errorMessage = '连接超时: 请检查网络和服务器设置'
-			} else if (error.message && error.message.includes('ENOTFOUND')) {
-				errorMessage = '找不到服务器: 请检查URL是否正确'
-			} else if (error.message && error.message.includes('ECONNREFUSED')) {
-				errorMessage = '连接被拒绝: 服务器可能未运行或拒绝连接'
-			} else if (error.message) {
-				errorMessage = error.message
+				setFiles(sortedFiles)
+				setIsLoading(false)
 			}
+		} catch (err) {
+			loadPromiseResolved = true
+			clearTimeout(timeoutId)
 
-			setError(errorMessage)
-			setIsLoading(false)
-			logError('加载WebDAV文件失败:', error)
-		} finally {
-			if (timeoutId) {
-				clearTimeout(timeoutId)
+			if (isMounted) {
+				logError('获取WebDAV文件列表失败:', err)
+				setError(err.message || '获取文件列表失败')
+				setIsLoading(false)
+
+				// 连接问题时尝试验证WebDAV连接
+				try {
+					const server = getCurrentWebDAVServer()
+					if (server) {
+						const isConnected = await verifyWebDAVConnection(server)
+						if (!isConnected && isMounted) {
+							setError('无法连接到WebDAV服务器，请检查网络连接或服务器配置')
+						}
+					}
+				} catch (verifyError) {
+					if (isMounted) {
+						logError('验证WebDAV连接失败:', verifyError)
+					}
+				}
 			}
 		}
-	}, [])
+	}, [isMounted])
 
 	// 打开WebDAV设置
 	const openWebDAVSettings = useCallback(() => {
