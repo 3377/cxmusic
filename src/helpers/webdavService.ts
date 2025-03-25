@@ -79,13 +79,19 @@ export function subscribeToWebDAVStatus(callback: Subscriber): () => void {
  * 通知所有订阅者状态已更新
  */
 function notifySubscribers(): void {
-	subscribers.forEach((callback) => {
-		try {
-			callback()
-		} catch (error) {
-			logError('调用WebDAV状态订阅者回调失败:', error)
-		}
-	})
+	try {
+		// 添加防御性检查
+		const subscribersCopy = [...subscribers];
+		subscribersCopy.forEach((callback) => {
+			try {
+				callback()
+			} catch (error) {
+				logError('调用WebDAV状态订阅者回调失败:', error)
+			}
+		})
+	} catch (error) {
+		logError('通知WebDAV状态订阅者失败:', error)
+	}
 }
 
 // 保存WebDAV服务器列表到存储
@@ -157,7 +163,12 @@ export async function setupWebDAV(): Promise<void> {
 							logInfo(`尝试连接到上次使用的WebDAV服务器: ${server.name}`)
 							await connectToServer(server)
 							logInfo(`成功连接到WebDAV服务器: ${server.name}`)
-							notifySubscribers()
+							// 成功后安全地通知订阅者
+							try {
+								notifySubscribers()
+							} catch (notifyError) {
+								logError('通知WebDAV服务器连接成功失败:', notifyError)
+							}
 							return
 						} catch (connectError) {
 							logError(`连接到默认WebDAV服务器失败: ${connectError.message || '未知错误'}`)
@@ -174,7 +185,12 @@ export async function setupWebDAV(): Promise<void> {
 						logInfo('尝试连接到第一个可用的WebDAV服务器')
 						await connectToServer(servers[0])
 						logInfo(`成功连接到第一个WebDAV服务器: ${servers[0].name}`)
-						notifySubscribers()
+						// 成功后安全地通知订阅者
+						try {
+							notifySubscribers()
+						} catch (notifyError) {
+							logError('通知WebDAV服务器连接成功失败:', notifyError)
+						}
 						return
 					} catch (connectError) {
 						logError(`连接到第一个WebDAV服务器失败: ${connectError.message || '未知错误'}`)
@@ -189,13 +205,25 @@ export async function setupWebDAV(): Promise<void> {
 		}
 
 		// 即使没有成功连接，也标记为初始化完成
-		notifySubscribers()
+		try {
+			notifySubscribers()
+		} catch (error) {
+			logError('通知WebDAV初始化完成失败:', error)
+		}
 		logInfo('WebDAV服务初始化完成')
 	} catch (error) {
 		logError('WebDAV服务初始化失败:', error)
 		// 重置状态
 		webdavClient = null
 		currentServer = null
+		
+		// 即使出错也安全地通知订阅者
+		try {
+			notifySubscribers()
+		} catch (notifyError) {
+			logError('通知WebDAV初始化失败错误:', notifyError)
+		}
+		
 		// 抛出异常以便上层捕获
 		throw error
 	}
@@ -673,31 +701,79 @@ export function useCurrentWebDAVServer() {
 	return server
 }
 
-// 添加额外的错误捕获和连接检查函数
-export const verifyWebDAVConnection = async (server: WebDAVServer): Promise<boolean> => {
+/**
+ * 验证WebDAV连接
+ * @param server WebDAV服务器配置
+ * @returns 连接是否成功
+ */
+export async function verifyWebDAVConnection(server: WebDAVServer): Promise<boolean> {
 	try {
 		if (!server || !server.url) {
-			logError('无效的WebDAV服务器配置')
 			return false
 		}
 
-		const client = createClient(server.url, {
+		// 创建临时WebDAV客户端
+		const clientOptions: WebDAVClientOptions = {
 			username: server.username || '',
 			password: server.password || '',
-		})
+			maxBodyLength: 1024 * 1024 * 10, // 10MB
+			maxContentLength: 1024 * 1024 * 10, // 10MB
+		}
 
-		if (!client) {
-			logError('无法创建WebDAV客户端')
+		// 创建客户端可能会失败
+		let client;
+		try {
+			client = createClient(server.url, clientOptions)
+		} catch (e) {
+			logError('创建WebDAV客户端验证失败:', e)
 			return false
 		}
 
-		// 尝试连接 - 获取根目录内容
-		await client.getDirectoryContents('/')
-		logInfo('WebDAV连接验证成功:', server.name)
-		return true
+		if (!client) {
+			return false
+		}
+
+		// 设置短超时时间
+		const timeoutPromise = new Promise<boolean>((_, reject) => {
+			setTimeout(() => reject(new Error('验证连接超时')), 5000)
+		})
+
+		// 测试连接
+		const testPromise = (async () => {
+			try {
+				await client.getDirectoryContents('/')
+				return true
+			} catch (e) {
+				logError('验证WebDAV连接失败:', e)
+				return false
+			}
+		})()
+
+		// 使用Promise.race处理超时
+		return await Promise.race([testPromise, timeoutPromise])
 	} catch (error) {
-		logError('WebDAV连接验证失败:', error)
+		logError('验证WebDAV连接时发生错误:', error)
 		return false
+	}
+}
+
+/**
+ * 检查WebDAV服务状态
+ * 这是一个安全的方法，即使失败也不会抛出异常
+ */
+export function checkWebDAVStatus(): { isConnected: boolean, server: WebDAVServer | null } {
+	try {
+		logInfo('检查WebDAV服务状态')
+		return {
+			isConnected: webdavClient !== null,
+			server: currentServer
+		}
+	} catch (error) {
+		logError('检查WebDAV服务状态失败:', error)
+		return {
+			isConnected: false,
+			server: null
+		}
 	}
 }
 

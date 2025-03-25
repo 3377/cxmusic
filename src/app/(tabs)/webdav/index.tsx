@@ -178,18 +178,26 @@ const playWebDavTrack = async (musicItem) => {
 			throw new Error('无效的音乐项')
 		}
 
-		// 直接使用Track Player API播放音乐
-		await TrackPlayer.reset()
-		await TrackPlayer.add({
-			id: musicItem.id || `webdav-${Date.now()}`,
-			url: musicItem.url,
-			title: musicItem.title || '未知标题',
-			artist: musicItem.artist || '未知艺术家',
-			artwork: musicItem.artwork || '',
-		})
-		await TrackPlayer.play()
+		logInfo('准备播放WebDAV音乐:', musicItem.title)
 
-		logInfo('正在播放WebDAV音乐:', musicItem.title)
+		// 检查TrackPlayer是否准备就绪
+		try {
+			// 直接使用Track Player API播放音乐
+			await TrackPlayer.reset()
+			await TrackPlayer.add({
+				id: musicItem.id || `webdav-${Date.now()}`,
+				url: musicItem.url,
+				title: musicItem.title || '未知标题',
+				artist: musicItem.artist || '未知艺术家',
+				artwork: musicItem.artwork || '',
+			})
+			await TrackPlayer.play()
+
+			logInfo('正在播放WebDAV音乐:', musicItem.title)
+		} catch (playerError) {
+			logError('TrackPlayer操作失败:', playerError)
+			Alert.alert('播放错误', '音乐播放器初始化失败，请稍后重试')
+		}
 	} catch (error) {
 		logError('播放WebDAV音乐失败:', error)
 		Alert.alert('错误', '无法播放此音乐文件')
@@ -203,17 +211,24 @@ const addToPlaylist = async (musicItem) => {
 			throw new Error('无效的音乐项')
 		}
 
-		// 将音乐添加到播放队列
-		await TrackPlayer.add({
-			id: musicItem.id || `webdav-${Date.now()}`,
-			url: musicItem.url,
-			title: musicItem.title || '未知标题',
-			artist: musicItem.artist || '未知艺术家',
-			artwork: musicItem.artwork || '',
-		})
+		logInfo('准备添加到播放列表:', musicItem.title)
 
-		logInfo('已添加到播放列表:', musicItem.title)
-		Alert.alert('提示', '已添加到播放列表')
+		// 将音乐添加到播放队列
+		try {
+			await TrackPlayer.add({
+				id: musicItem.id || `webdav-${Date.now()}`,
+				url: musicItem.url,
+				title: musicItem.title || '未知标题',
+				artist: musicItem.artist || '未知艺术家',
+				artwork: musicItem.artwork || '',
+			})
+
+			logInfo('已添加到播放列表:', musicItem.title)
+			Alert.alert('提示', '已添加到播放列表')
+		} catch (playerError) {
+			logError('TrackPlayer添加失败:', playerError)
+			Alert.alert('错误', '音乐播放器初始化失败，请稍后重试')
+		}
 	} catch (error) {
 		logError('添加到播放列表失败:', error)
 		Alert.alert('错误', '无法添加到播放列表')
@@ -231,10 +246,33 @@ export default function WebDavScreen() {
 	const [isMounted, setIsMounted] = useState(true)
 	const [initialized, setInitialized] = useState(false) // 添加初始化状态标记
 	const [currentServer, setCurrentServer] = useState(null) // 显式保存当前服务器状态
+	const [isPlayerReady, setIsPlayerReady] = useState(false) // 跟踪播放器状态
 
 	// 组件挂载状态管理
 	useEffect(() => {
 		setIsMounted(true)
+		
+		// 初始化播放器
+		const initPlayer = async () => {
+			try {
+				// 检查TrackPlayer状态，但不阻塞界面渲染
+				const state = await TrackPlayer.getState()
+				if (isMounted) {
+					setIsPlayerReady(true)
+					logInfo('WebDAV页面: TrackPlayer已就绪', state)
+				}
+			} catch (playerError) {
+				logError('WebDAV页面: TrackPlayer初始化检查失败', playerError)
+				// 继续执行，不阻塞页面
+				if (isMounted) {
+					setIsPlayerReady(false)
+				}
+			}
+		}
+		
+		// 异步初始化播放器，但不等待
+		initPlayer()
+		
 		return () => setIsMounted(false)
 	}, [])
 
@@ -408,11 +446,23 @@ export default function WebDavScreen() {
 						Alert.alert('音乐文件', '选择操作', [
 							{
 								text: '立即播放',
-								onPress: () => playWebDavTrack(musicItem),
+								onPress: () => {
+									if (!isPlayerReady) {
+										Alert.alert('提示', '音乐播放器正在准备中，请稍后再试')
+										return
+									}
+									playWebDavTrack(musicItem)
+								},
 							},
 							{
 								text: '添加到播放列表',
-								onPress: () => addToPlaylist(musicItem),
+								onPress: () => {
+									if (!isPlayerReady) {
+										Alert.alert('提示', '音乐播放器正在准备中，请稍后再试')
+										return
+									}
+									addToPlaylist(musicItem)
+								},
 							},
 							{ text: '取消', style: 'cancel' },
 						])
@@ -427,7 +477,7 @@ export default function WebDavScreen() {
 				Alert.alert('不支持', '不支持此文件类型')
 			}
 		},
-		[currentPath, loadFiles],
+		[currentPath, loadFiles, isPlayerReady],
 	)
 
 	// 处理文件长按

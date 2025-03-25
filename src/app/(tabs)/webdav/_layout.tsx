@@ -1,6 +1,7 @@
 import { colors } from '@/constants/tokens'
 import { logError, logInfo } from '@/helpers/logger'
 import {
+	checkWebDAVStatus,
 	setupWebDAV,
 	subscribeToWebDAVStatus,
 	useCurrentWebDAVServer,
@@ -160,6 +161,9 @@ export default function WebDavLayout() {
 		// 防止组件卸载后的状态更新
 		setIsMounted(true)
 
+		// 确保不会被第二次WebDAV状态检查阻塞UI
+		let isSafeToUpdate = true
+
 		// 如果组件还挂载着，执行初始化
 		if (isMounted) {
 			// 初始化函数
@@ -171,7 +175,7 @@ export default function WebDavLayout() {
 
 					// 设置超时保护
 					let initTimeout = setTimeout(() => {
-						if (isMounted) {
+						if (isMounted && isSafeToUpdate) {
 							setInitError('初始化WebDAV服务超时，请检查网络连接')
 							setIsLoading(false)
 						}
@@ -183,8 +187,17 @@ export default function WebDavLayout() {
 					// 清除超时
 					clearTimeout(initTimeout)
 
+					// 在安全的上下文中检查WebDAV状态，不依赖TrackPlayer
+					try {
+						const status = checkWebDAVStatus();
+						logInfo(`WebDAV布局: 当前连接状态: ${status.isConnected ? '已连接' : '未连接'}`);
+					} catch (statusError) {
+						// 静默处理状态检查错误，不阻塞UI更新
+						logError('WebDAV布局: 状态检查失败 (忽略)', statusError);
+					}
+
 					// 如果组件仍然挂载，更新状态
-					if (isMounted) {
+					if (isMounted && isSafeToUpdate) {
 						setIsLoading(false)
 						logInfo('WebDAV布局: WebDAV服务初始化完成')
 					}
@@ -192,7 +205,7 @@ export default function WebDavLayout() {
 					logError('WebDAV布局: 初始化WebDAV服务失败', error)
 
 					// 如果组件仍然挂载，更新错误状态
-					if (isMounted) {
+					if (isMounted && isSafeToUpdate) {
 						setInitError(error.message || '初始化WebDAV服务失败')
 						setIsLoading(false)
 
@@ -209,15 +222,25 @@ export default function WebDavLayout() {
 			// 执行初始化
 			initWebDAV()
 
-			// 订阅WebDAV状态变更
+			// 订阅WebDAV状态变更 - 使用错误处理包装回调
 			const unsubscribe = subscribeToWebDAVStatus(() => {
-				logInfo('WebDAV布局: WebDAV状态已更新')
+				try {
+					logInfo('WebDAV布局: WebDAV状态已更新')
+					// 不在这里做任何可能引起UI阻塞的操作
+				} catch (statusError) {
+					logError('WebDAV布局: 处理状态更新失败', statusError)
+				}
 			})
 
 			// 清理函数
 			return () => {
+				isSafeToUpdate = false
 				setIsMounted(false)
-				unsubscribe()
+				try {
+					unsubscribe()
+				} catch (error) {
+					logError('WebDAV布局: 取消订阅失败', error)
+				}
 			}
 		}
 	}, [retryCount, isMounted])
@@ -359,7 +382,13 @@ export default function WebDavLayout() {
 						headerRight: () => <SafeHeaderButton onPress={handleSettingsPress} />,
 					}}
 				>
-					<Stack.Screen name="index" options={{ title: 'WebDAV 云音乐' }} />
+					<Stack.Screen 
+						name="index" 
+						options={{ 
+							title: 'WebDAV 云音乐',
+							headerTitleAlign: 'center', // 居中标题
+						}} 
+					/>
 				</Stack>
 			</ErrorBoundary>
 		)
