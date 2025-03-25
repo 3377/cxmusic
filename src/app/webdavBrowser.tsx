@@ -8,9 +8,9 @@ import {
 	useLoading,
 } from '@/helpers/loading'
 import { logError, logInfo } from '@/helpers/logger'
-import { PersistStatus } from '@/helpers/persistStatus'
 import { playListsStore } from '@/helpers/trackPlayerIndex'
 import { getCurrentWebDAVServer, getDirectoryContents, WebDAVFile } from '@/helpers/webdavService'
+import PersistStatus from '@/store/PersistStatus'
 import { formatBytes } from '@/utils/formatter'
 import { Feather } from '@expo/vector-icons'
 import { Audio } from 'expo-av'
