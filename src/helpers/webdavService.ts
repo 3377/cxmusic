@@ -81,7 +81,7 @@ export function subscribeToWebDAVStatus(callback: Subscriber): () => void {
 function notifySubscribers(): void {
 	try {
 		// 添加防御性检查
-		const subscribersCopy = [...subscribers];
+		const subscribersCopy = [...subscribers]
 		subscribersCopy.forEach((callback) => {
 			try {
 				callback()
@@ -216,14 +216,14 @@ export async function setupWebDAV(): Promise<void> {
 		// 重置状态
 		webdavClient = null
 		currentServer = null
-		
+
 		// 即使出错也安全地通知订阅者
 		try {
 			notifySubscribers()
 		} catch (notifyError) {
 			logError('通知WebDAV初始化失败错误:', notifyError)
 		}
-		
+
 		// 抛出异常以便上层捕获
 		throw error
 	}
@@ -254,7 +254,7 @@ export async function connectToServer(server: WebDAVServer): Promise<void> {
 		}
 
 		// 创建WebDAV客户端
-		let client;
+		let client
 		try {
 			client = createClient(server.url, clientOptions)
 		} catch (clientError) {
@@ -268,14 +268,50 @@ export async function connectToServer(server: WebDAVServer): Promise<void> {
 
 		// 测试连接 - 尝试获取根目录内容
 		try {
-			await client.getDirectoryContents('/')
+			// 设置10秒超时
+			const testTimeout = new Promise<never>((_, reject) => {
+				setTimeout(() => reject(new Error('连接测试超时')), 10000)
+			})
+
+			const testConnection = client.getDirectoryContents('/')
+
+			// 使用Promise.race处理超时
+			await Promise.race([testConnection, testTimeout])
+
 			logInfo('WebDAV服务器连接测试成功')
+
+			// 设置全局客户端和当前服务器
+			webdavClient = client
+			currentServer = {
+				...server,
+				client,
+			}
+
+			// 更新当前服务器ID到存储
+			try {
+				await AsyncStorage.setItem(CURRENT_WEBDAV_SERVER_KEY, server.id)
+			} catch (saveError) {
+				logError('保存当前WebDAV服务器ID失败:', saveError)
+				// 不影响主流程，继续执行
+			}
+
+			// 通知订阅者状态更新
+			try {
+				notifySubscribers()
+			} catch (notifyError) {
+				logError('通知WebDAV服务器连接状态更新失败:', notifyError)
+				// 不影响主流程，继续执行
+			}
+
+			logInfo(`已成功连接到WebDAV服务器: ${server.name}`)
 		} catch (testError) {
 			logError('WebDAV服务器连接测试失败:', testError)
 			// 添加更具体的错误信息
 			let errorMessage = '服务器连接测试失败'
 
-			if (testError.status === 401) {
+			if (testError.message && testError.message.includes('超时')) {
+				errorMessage = '连接超时: 服务器响应过慢或无法访问'
+			} else if (testError.status === 401) {
 				errorMessage = '授权失败: 请检查用户名和密码'
 			} else if (testError.status === 404) {
 				errorMessage = '服务器路径不存在: 请检查URL路径'
@@ -289,24 +325,21 @@ export async function connectToServer(server: WebDAVServer): Promise<void> {
 
 			throw new Error(errorMessage)
 		}
+	} catch (error) {
+		// 重置全局状态
+		webdavClient = null
+		currentServer = null
 
-		// 设置当前服务器和客户端
-		webdavClient = client
-		currentServer = {
-			...server,
-			client,
+		// 尝试通知订阅者状态更新
+		try {
+			notifySubscribers()
+		} catch (notifyError) {
+			logError('通知WebDAV服务器连接失败状态更新失败:', notifyError)
 		}
 
-		// 保存当前服务器ID
-		await AsyncStorage.setItem(CURRENT_WEBDAV_SERVER_KEY, server.id)
-
-		// 通知订阅者更新
-		notifySubscribers()
-
-		logInfo(`已成功连接到WebDAV服务器: ${server.name}`)
-	} catch (error) {
 		logError(`连接到WebDAV服务器失败 (${server?.name || '未知'}):`, error)
-		throw error // 重新抛出错误以便上层处理
+		// 继续向上抛出错误
+		throw error
 	}
 }
 
@@ -442,14 +475,46 @@ export async function deleteWebDAVServer(id: string): Promise<void> {
  */
 export async function getDirectoryContents(
 	path: string = '/',
-	options: { onlyMusic?: boolean } = {},
+	options: { onlyMusic?: boolean; timeout?: number } = {},
 ): Promise<WebDAVFile[]> {
 	if (!webdavClient || !currentServer) {
 		throw new Error('WebDAV客户端未连接')
 	}
 
+	// 设置默认超时为20秒
+	const timeout = options.timeout || 20000
+
 	try {
-		const contents = await webdavClient.getDirectoryContents(path)
+		// 创建超时处理
+		const timeoutPromise = new Promise<never>((_, reject) => {
+			setTimeout(() => reject(new Error('获取目录内容超时')), timeout)
+		})
+
+		// 实际操作
+		const directoryPromise = (async () => {
+			try {
+				return await webdavClient.getDirectoryContents(path)
+			} catch (error) {
+				// 转换常见错误为更友好的消息
+				if (error.status === 401) {
+					throw new Error('授权失败：请检查用户名和密码')
+				} else if (error.status === 404) {
+					throw new Error('找不到目录：路径可能不存在')
+				} else if (error.status === 403) {
+					throw new Error('访问被拒绝：没有权限访问此目录')
+				} else if (error.message && error.message.includes('ENOTFOUND')) {
+					throw new Error('无法连接到服务器：请检查URL或网络连接')
+				} else if (error.message && error.message.includes('ECONNREFUSED')) {
+					throw new Error('连接被拒绝：服务器可能未运行')
+				} else if (error.message && error.message.includes('certificate')) {
+					throw new Error('SSL证书错误：请检查服务器证书设置')
+				}
+				throw error
+			}
+		})()
+
+		// 使用Promise.race处理超时
+		const contents = await Promise.race([directoryPromise, timeoutPromise])
 
 		// 过滤并转换结果
 		return contents
@@ -476,7 +541,8 @@ export async function getDirectoryContents(
 			}))
 	} catch (error) {
 		logError(`获取WebDAV目录内容失败 (${path}):`, error)
-		throw error
+		// 重新抛出带更友好消息的错误
+		throw new Error(`获取目录内容失败: ${error.message || '未知错误'}`)
 	}
 }
 
@@ -721,7 +787,7 @@ export async function verifyWebDAVConnection(server: WebDAVServer): Promise<bool
 		}
 
 		// 创建客户端可能会失败
-		let client;
+		let client
 		try {
 			client = createClient(server.url, clientOptions)
 		} catch (e) {
@@ -761,18 +827,18 @@ export async function verifyWebDAVConnection(server: WebDAVServer): Promise<bool
  * 检查WebDAV服务状态
  * 这是一个安全的方法，即使失败也不会抛出异常
  */
-export function checkWebDAVStatus(): { isConnected: boolean, server: WebDAVServer | null } {
+export function checkWebDAVStatus(): { isConnected: boolean; server: WebDAVServer | null } {
 	try {
 		logInfo('检查WebDAV服务状态')
 		return {
 			isConnected: webdavClient !== null,
-			server: currentServer
+			server: currentServer,
 		}
 	} catch (error) {
 		logError('检查WebDAV服务状态失败:', error)
 		return {
 			isConnected: false,
-			server: null
+			server: null,
 		}
 	}
 }

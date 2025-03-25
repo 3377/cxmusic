@@ -1,38 +1,151 @@
 import { colors } from '@/constants/tokens'
-import { logError, logInfo } from '@/helpers/logger'
+import { logError } from '@/helpers/logger'
+import { checkWebDAVStatus, setupWebDAV } from '@/helpers/webdavService'
 import { Feather } from '@expo/vector-icons'
 import { Link, Redirect, Stack } from 'expo-router'
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import { ActivityIndicator, BackHandler, Text, TouchableOpacity, View } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 
 // 错误边界组件
 class ErrorBoundary extends React.Component {
-	state = { hasError: false, error: null, errorCount: 0 }
+	state = { hasError: false, error: null, errorCount: 0, lastErrorTime: 0 }
+
+	// 用于跟踪连续错误
+	errorTimeThreshold = 10000 // 10秒内的错误才算连续错误
 
 	static getDerivedStateFromError(error) {
-		return { hasError: true, error }
+		return { hasError: true, error, lastErrorTime: Date.now() }
 	}
 
 	componentDidCatch(error, errorInfo) {
 		logError('WebDAV布局渲染错误:', error, errorInfo)
 	}
 
+	// 检查是否为连续错误
+	isConsecutiveError() {
+		const now = Date.now()
+		const isConsecutive = now - this.state.lastErrorTime < this.errorTimeThreshold
+
+		return isConsecutive
+	}
+
 	retry = () => {
+		// 检查是否为连续错误
+		const errorIncrement = this.isConsecutiveError() ? 1 : 0
+
 		this.setState((prevState) => ({
 			hasError: false,
 			error: null,
-			errorCount: prevState.errorCount + 1,
+			lastErrorTime: Date.now(),
+			errorCount: errorIncrement ? prevState.errorCount + 1 : 1,
 		}))
+	}
+
+	// 强制重置所有状态
+	forceReset = () => {
+		// 尝试初始化WebDAV服务
+		setupWebDAV().catch((err) => {
+			logError('重置WebDAV服务失败:', err)
+		})
+
+		// 重置错误状态
+		this.setState({
+			hasError: false,
+			error: null,
+			errorCount: 0,
+			lastErrorTime: 0,
+		})
 	}
 
 	render() {
 		const insets = useSafeAreaInsets ? useSafeAreaInsets() : { top: 0 }
 
-		// 如果错误次数过多，返回到主页
-		if (this.state.errorCount > 5) {
-			logError('WebDAV组件多次尝试失败，返回主页')
-			return <Redirect href="/(tabs)/" />
+		// 如果错误次数过多，提供重置选项
+		if (this.state.errorCount > 3) {
+			logError('WebDAV组件多次尝试失败，建议重置')
+			return (
+				<View
+					style={{
+						flex: 1,
+						justifyContent: 'center',
+						alignItems: 'center',
+						backgroundColor: colors.background,
+						paddingTop: insets.top,
+						padding: 20,
+					}}
+				>
+					<Feather name="alert-circle" size={48} color="red" />
+					<Text
+						style={{
+							marginTop: 16,
+							color: colors.text,
+							fontSize: 18,
+							textAlign: 'center',
+							fontWeight: 'bold',
+						}}
+					>
+						WebDAV页面无法加载
+					</Text>
+					<Text
+						style={{
+							marginTop: 8,
+							color: colors.textMuted,
+							textAlign: 'center',
+							paddingHorizontal: 24,
+							marginBottom: 20,
+						}}
+					>
+						多次尝试后仍然失败。这可能是网络问题或WebDAV服务器配置问题。
+					</Text>
+
+					<TouchableOpacity
+						onPress={this.forceReset}
+						style={{
+							marginTop: 12,
+							backgroundColor: colors.primary,
+							padding: 12,
+							borderRadius: 8,
+							width: '100%',
+							alignItems: 'center',
+						}}
+					>
+						<Text style={{ color: '#fff', fontWeight: 'bold' }}>重置WebDAV服务</Text>
+					</TouchableOpacity>
+
+					<Link href="/webdavModal" asChild>
+						<TouchableOpacity
+							style={{
+								marginTop: 12,
+								backgroundColor: colors.secondary || '#666',
+								padding: 12,
+								borderRadius: 8,
+								width: '100%',
+								alignItems: 'center',
+							}}
+						>
+							<Text style={{ color: '#fff' }}>WebDAV设置</Text>
+						</TouchableOpacity>
+					</Link>
+
+					<Link href="/(tabs)/" asChild>
+						<TouchableOpacity
+							style={{
+								marginTop: 12,
+								backgroundColor: 'transparent',
+								padding: 12,
+								borderRadius: 8,
+								borderWidth: 1,
+								borderColor: colors.border || '#333',
+								width: '100%',
+								alignItems: 'center',
+							}}
+						>
+							<Text style={{ color: colors.text }}>返回主页</Text>
+						</TouchableOpacity>
+					</Link>
+				</View>
+			)
 		}
 
 		if (this.state.hasError) {
@@ -113,101 +226,126 @@ function SafeHeaderButton() {
 function WebDAVSelector() {
 	const insets = useSafeAreaInsets ? useSafeAreaInsets() : { top: 0 }
 	const [shouldRedirect, setShouldRedirect] = useState(false)
-	
+	const [checking, setChecking] = useState(true)
+	const [webdavAvailable, setWebdavAvailable] = useState(false)
+	const hasCheckedRef = useRef(false)
+
+	// 检查WebDAV状态
+	useEffect(() => {
+		if (hasCheckedRef.current) return
+
+		const checkStatus = async () => {
+			try {
+				setChecking(true)
+				// 检查WebDAV服务状态
+				const status = checkWebDAVStatus()
+				setWebdavAvailable(status.isConnected)
+				hasCheckedRef.current = true
+			} catch (error) {
+				logError('检查WebDAV状态失败:', error)
+				setWebdavAvailable(false)
+			} finally {
+				setChecking(false)
+			}
+		}
+
+		checkStatus()
+	}, [])
+
 	// 添加返回键处理
 	useEffect(() => {
 		const backHandler = BackHandler.addEventListener('hardwareBackPress', () => {
 			setShouldRedirect(true)
 			return true
 		})
-		
+
 		return () => backHandler.remove()
 	}, [])
-	
+
 	// 如果需要重定向，返回主页
 	if (shouldRedirect) {
 		return <Redirect href="/(tabs)/" />
 	}
-	
+
+	// 如果正在加载，显示加载状态
+	if (checking) {
+		return (
+			<View
+				style={{
+					flex: 1,
+					backgroundColor: colors.background,
+					justifyContent: 'center',
+					alignItems: 'center',
+				}}
+			>
+				<ActivityIndicator size="large" color={colors.primary} />
+				<Text style={{ marginTop: 16, color: colors.text }}>检查WebDAV服务状态...</Text>
+			</View>
+		)
+	}
+
 	return (
-		<View 
+		<View
 			style={{
 				flex: 1,
 				backgroundColor: colors.background,
 				padding: 20,
 				paddingTop: insets.top + 20,
-				alignItems: 'center', 
-				justifyContent: 'center'
+				alignItems: 'center',
+				justifyContent: 'center',
 			}}
 		>
-			<Text style={{ fontSize: 18, color: colors.text, marginBottom: 30 }}>
-				选择WebDAV服务类型
-			</Text>
-			
+			<Text style={{ fontSize: 18, color: colors.text, marginBottom: 30 }}>选择WebDAV服务类型</Text>
+
 			<Link href="/webdavBrowser" asChild>
-				<TouchableOpacity 
+				<TouchableOpacity
 					style={{
 						backgroundColor: colors.primary,
 						padding: 15,
 						borderRadius: 8,
 						width: '100%',
 						alignItems: 'center',
-						marginBottom: 15
+						marginBottom: 15,
+						opacity: webdavAvailable ? 1 : 0.6,
 					}}
+					disabled={!webdavAvailable}
 				>
-					<Text style={{ color: 'white', fontSize: 16 }}>WebDAV 文件浏览器</Text>
+					<Text style={{ color: 'white', fontSize: 16 }}>
+						WebDAV 文件浏览器
+						{!webdavAvailable && ' (需要先配置服务器)'}
+					</Text>
 				</TouchableOpacity>
 			</Link>
-			
+
 			<Link href="/webdavModal" asChild>
-				<TouchableOpacity 
+				<TouchableOpacity
 					style={{
 						backgroundColor: colors.secondary || '#666',
 						padding: 15,
 						borderRadius: 8,
 						width: '100%',
 						alignItems: 'center',
-						marginBottom: 30
+						marginBottom: 30,
 					}}
 				>
 					<Text style={{ color: 'white', fontSize: 16 }}>WebDAV 服务器管理</Text>
 				</TouchableOpacity>
 			</Link>
-			
+
 			<Link href="/(tabs)/" asChild>
-				<TouchableOpacity 
+				<TouchableOpacity
 					style={{
 						padding: 15,
 						borderRadius: 8,
 						borderWidth: 1,
 						borderColor: colors.border || '#333',
 						width: '100%',
-						alignItems: 'center'
+						alignItems: 'center',
 					}}
 				>
 					<Text style={{ color: colors.text, fontSize: 16 }}>返回主页</Text>
 				</TouchableOpacity>
 			</Link>
-		</View>
-	)
-}
-
-// 加载状态组件
-function LoadingView() {
-	const insets = useSafeAreaInsets ? useSafeAreaInsets() : { top: 0 }
-
-	return (
-		<View
-			style={{
-				flex: 1,
-				justifyContent: 'center',
-				alignItems: 'center',
-				backgroundColor: colors.background,
-				paddingTop: insets.top,
-			}}
-		>
-			<ActivityIndicator size="large" color={colors.primary} />
-			<Text style={{ marginTop: 16, color: colors.text }}>正在加载WebDAV...</Text>
 		</View>
 	)
 }
@@ -231,14 +369,15 @@ export default function WebDavLayout() {
 						backgroundColor: colors.background,
 					},
 					headerRight: () => <SafeHeaderButton />,
+					animation: 'slide_from_right',
 				}}
 			>
-				<Stack.Screen 
-					name="index" 
-					options={{ 
+				<Stack.Screen
+					name="index"
+					options={{
 						title: 'WebDAV 服务',
 						headerTitleAlign: 'center',
-					}} 
+					}}
 					component={WebDAVSelector}
 				/>
 			</Stack>
