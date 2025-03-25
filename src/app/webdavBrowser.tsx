@@ -1,8 +1,11 @@
+import { PlaylistsListModal } from '@/components/PlaylistsListModal'
 import { colors } from '@/constants/tokens'
 import { logError, logInfo } from '@/helpers/logger'
+import { playListsStore } from '@/helpers/trackPlayerIndex'
 import { getCurrentWebDAVServer, getDirectoryContents, WebDAVFile } from '@/helpers/webdavService'
 import { formatBytes } from '@/utils/formatter'
 import { Feather } from '@expo/vector-icons'
+import * as FileSystem from 'expo-file-system'
 import { Stack, useRouter } from 'expo-router'
 import React, { useEffect, useRef, useState } from 'react'
 import {
@@ -10,6 +13,7 @@ import {
 	Alert,
 	BackHandler,
 	FlatList,
+	Modal,
 	SafeAreaView,
 	StyleSheet,
 	Text,
@@ -143,29 +147,73 @@ class ErrorCatcher extends React.Component {
 	}
 }
 
-// 播放WebDAV音乐的简化函数
-const playWebDavTrack = async (musicItem) => {
+// 缓存WebDAV音乐文件
+const cacheWebDAVFile = async (file: WebDAVFile) => {
 	try {
-		if (!musicItem) {
-			throw new Error('无效的音乐项')
+		// 创建缓存目录
+		const cacheDir = `${FileSystem.cacheDirectory}webdav_cache/`
+		await FileSystem.makeDirectoryAsync(cacheDir, { intermediates: true }).catch(() => {})
+
+		// 生成缓存文件路径
+		const cacheFilePath = `${cacheDir}${file.basename}`
+
+		// 检查是否已缓存
+		const cacheInfo = await FileSystem.getInfoAsync(cacheFilePath)
+		if (cacheInfo.exists) {
+			logInfo('使用缓存的音乐文件:', file.basename)
+			return cacheFilePath
 		}
 
-		logInfo('准备播放WebDAV音乐:', musicItem.title)
+		// 获取WebDAV文件URL
+		const server = getCurrentWebDAVServer()
+		if (!server?.url) throw new Error('WebDAV服务器未配置')
 
-		// 检查TrackPlayer是否准备就绪
+		const fileUrl = `${server.url}${file.filename}`
+
+		// 下载文件
+		logInfo('开始下载音乐文件:', file.basename)
+		await FileSystem.downloadAsync(fileUrl, cacheFilePath, {
+			headers: {
+				Authorization: `Basic ${btoa(`${server.username}:${server.password}`)}`,
+			},
+		})
+
+		logInfo('音乐文件下载完成:', file.basename)
+		return cacheFilePath
+	} catch (error) {
+		logError('缓存WebDAV文件失败:', error)
+		throw error
+	}
+}
+
+// 播放WebDAV音乐的函数
+const playWebDavTrack = async (file: WebDAVFile) => {
+	try {
+		if (!file) throw new Error('无效的音乐文件')
+
+		logInfo('准备播放WebDAV音乐:', file.basename)
+
+		// 缓存文件
+		const cachedFilePath = await cacheWebDAVFile(file)
+
+		// 创建音乐项
+		const musicItem = {
+			id: `webdav-${Date.now()}`,
+			url: cachedFilePath,
+			title: file.basename.replace(/\.[^/.]+$/, ''), // 移除扩展名
+			artist: 'WebDAV音乐',
+			artwork: '',
+			platform: 'webdav',
+			duration: 0,
+		}
+
+		// 播放音乐
 		try {
-			// 直接使用Track Player API播放音乐
 			await TrackPlayer.reset()
-			await TrackPlayer.add({
-				id: musicItem.id || `webdav-${Date.now()}`,
-				url: musicItem.url,
-				title: musicItem.title || '未知标题',
-				artist: musicItem.artist || '未知艺术家',
-				artwork: musicItem.artwork || '',
-			})
+			await TrackPlayer.add(musicItem)
 			await TrackPlayer.play()
 
-			logInfo('正在播放WebDAV音乐:', musicItem.title)
+			logInfo('正在播放WebDAV音乐:', file.basename)
 		} catch (playerError) {
 			logError('TrackPlayer操作失败:', playerError)
 			Alert.alert('播放错误', '音乐播放器初始化失败，请稍后重试')
@@ -176,35 +224,72 @@ const playWebDavTrack = async (musicItem) => {
 	}
 }
 
-// 将WebDAV文件添加到播放列表的简化函数
-const addToPlaylist = async (musicItem) => {
+// 将WebDAV文件添加到播放列表的函数
+const addToPlaylist = async (file: WebDAVFile, playlist: IMusic.PlayList) => {
 	try {
-		if (!musicItem) {
-			throw new Error('无效的音乐项')
+		if (!file) throw new Error('无效的音乐文件')
+
+		logInfo('准备添加到播放列表:', file.basename)
+
+		// 缓存文件
+		const cachedFilePath = await cacheWebDAVFile(file)
+
+		// 创建音乐项
+		const musicItem: IMusic.IMusicItem = {
+			id: `webdav-${Date.now()}`,
+			url: cachedFilePath,
+			title: file.basename.replace(/\.[^/.]+$/, ''), // 移除扩展名
+			artist: 'WebDAV音乐',
+			artwork: '',
+			platform: 'webdav',
+			duration: 0,
 		}
 
-		logInfo('准备添加到播放列表:', musicItem.title)
+		// 添加到播放列表
+		const nowPlayLists = playListsStore.getValue() || []
+		const updatedPlayLists = nowPlayLists.map((existingPlaylist) => {
+			if (existingPlaylist.id === playlist.id) {
+				return {
+					...existingPlaylist,
+					songs: [...existingPlaylist.songs, musicItem],
+				}
+			}
+			return existingPlaylist
+		})
 
-		// 将音乐添加到播放队列
-		try {
-			await TrackPlayer.add({
-				id: musicItem.id || `webdav-${Date.now()}`,
-				url: musicItem.url,
-				title: musicItem.title || '未知标题',
-				artist: musicItem.artist || '未知艺术家',
-				artwork: musicItem.artwork || '',
-			})
+		playListsStore.setValue(updatedPlayLists)
+		PersistStatus.set('music.playLists', updatedPlayLists)
 
-			logInfo('已添加到播放列表:', musicItem.title)
-			Alert.alert('提示', '已添加到播放列表')
-		} catch (playerError) {
-			logError('TrackPlayer添加失败:', playerError)
-			Alert.alert('错误', '音乐播放器初始化失败，请稍后重试')
-		}
+		logInfo('已添加到播放列表:', file.basename)
+		Alert.alert('提示', '已添加到播放列表')
 	} catch (error) {
 		logError('添加到播放列表失败:', error)
 		Alert.alert('错误', '无法添加到播放列表')
 	}
+}
+
+// 选择播放列表对话框组件
+const PlaylistSelector = ({ visible, onClose, onSelect, file }) => {
+	return (
+		<Modal visible={visible} animationType="slide" transparent={true}>
+			<View style={styles.modalContainer}>
+				<View style={styles.modalContent}>
+					<View style={styles.modalHeader}>
+						<Text style={styles.modalTitle}>选择播放列表</Text>
+						<TouchableOpacity onPress={onClose}>
+							<Feather name="x" size={24} color={colors.text} />
+						</TouchableOpacity>
+					</View>
+					<PlaylistsListModal
+						onPlaylistPress={(playlist) => {
+							onSelect(playlist)
+							onClose()
+						}}
+					/>
+				</View>
+			</View>
+		</Modal>
+	)
 }
 
 // 安全的WebDAV浏览器组件
@@ -219,6 +304,8 @@ export default function WebDAVBrowser() {
 	const abortControllerRef = useRef<AbortController | null>(null)
 	const retryCountRef = useRef(0)
 	const initTimeoutRef = useRef<NodeJS.Timeout | null>(null)
+	const [playlistSelectorVisible, setPlaylistSelectorVisible] = useState(false)
+	const [selectedFile, setSelectedFile] = useState<WebDAVFile | null>(null)
 
 	// 清理函数 - 取消所有进行中的请求和超时
 	const cleanup = () => {
@@ -370,7 +457,7 @@ export default function WebDAVBrowser() {
 		}
 	}
 
-	// 处理文件/目录点击
+	// 处理文件点击
 	const handleFilePress = async (file) => {
 		if (file.type === 'directory') {
 			// 保存当前路径到历史
@@ -380,23 +467,17 @@ export default function WebDAVBrowser() {
 			// 加载新目录
 			loadFiles(file.path)
 		} else if (file.type === 'file' && file.basename.match(/\.(mp3|m4a|wav|flac|aac)$/i)) {
-			// 处理音频文件
-			const musicItem = {
-				id: `webdav-${Date.now()}`,
-				url: file.filename,
-				title: file.basename,
-				artist: 'WebDAV音乐',
-				artwork: '',
-			}
-
 			Alert.alert('选择操作', '请选择要执行的操作', [
 				{
 					text: '播放',
-					onPress: () => playWebDavTrack(musicItem),
+					onPress: () => playWebDavTrack(file),
 				},
 				{
 					text: '添加到播放列表',
-					onPress: () => addToPlaylist(musicItem),
+					onPress: () => {
+						setSelectedFile(file)
+						setPlaylistSelectorVisible(true)
+					},
 				},
 				{
 					text: '取消',
@@ -409,14 +490,8 @@ export default function WebDAVBrowser() {
 	// 处理文件长按
 	const handleFileLongPress = (file) => {
 		if (file.type === 'file' && file.basename.match(/\.(mp3|m4a|wav|flac|aac)$/i)) {
-			const musicItem = {
-				id: `webdav-${Date.now()}`,
-				url: file.filename,
-				title: file.basename,
-				artist: 'WebDAV音乐',
-				artwork: '',
-			}
-			addToPlaylist(musicItem)
+			setSelectedFile(file)
+			setPlaylistSelectorVisible(true)
 		}
 	}
 
@@ -515,10 +590,17 @@ export default function WebDAVBrowser() {
 			<Stack.Screen
 				options={{
 					title: '文件浏览',
+					headerStyle: {
+						backgroundColor: colors.background,
+					},
+					headerTitleStyle: {
+						color: colors.text,
+					},
+					headerTintColor: colors.primary,
 					headerLeft: () => (
 						<TouchableOpacity
 							onPress={() => {
-								cleanup() // 确保在返回前取消所有请求
+								cleanup()
 								router.back()
 							}}
 							style={{ paddingLeft: 8 }}
@@ -556,6 +638,17 @@ export default function WebDAVBrowser() {
 						</View>
 
 						{renderContent()}
+
+						<PlaylistSelector
+							visible={playlistSelectorVisible}
+							onClose={() => setPlaylistSelectorVisible(false)}
+							onSelect={(playlist) => {
+								if (selectedFile) {
+									addToPlaylist(selectedFile, playlist)
+								}
+							}}
+							file={selectedFile}
+						/>
 					</View>
 				</ErrorCatcher>
 			</SafeAreaView>
@@ -644,5 +737,29 @@ const styles = StyleSheet.create({
 		color: colors.textMuted || '#888',
 		fontSize: 12,
 		marginTop: 2,
+	},
+	modalContainer: {
+		flex: 1,
+		backgroundColor: 'rgba(0, 0, 0, 0.5)',
+		justifyContent: 'flex-end',
+	},
+	modalContent: {
+		backgroundColor: colors.background,
+		borderTopLeftRadius: 20,
+		borderTopRightRadius: 20,
+		paddingTop: 20,
+		paddingHorizontal: 16,
+		maxHeight: '80%',
+	},
+	modalHeader: {
+		flexDirection: 'row',
+		justifyContent: 'space-between',
+		alignItems: 'center',
+		marginBottom: 20,
+	},
+	modalTitle: {
+		fontSize: 18,
+		fontWeight: 'bold',
+		color: colors.text,
 	},
 })
