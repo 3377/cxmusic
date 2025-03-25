@@ -7,8 +7,6 @@
 		"android": "expo run:android",
 		"ios": "expo run:ios",
 		"lint": "eslint .",
-		"postinstall": "patch-package",
-		"prepare": "patch-package",
 		"start": "expo start --dev-client"
 	},
 	"dependencies": {

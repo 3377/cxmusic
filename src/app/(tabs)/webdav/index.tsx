@@ -303,14 +303,23 @@ export default function WebDavScreen() {
 				}
 
 				// 添加超时保护
-				const timeoutPromise = new Promise((_, reject) => {
-					setTimeout(() => {
-						reject(new Error('加载文件列表超时'))
-					}, 15000) // 15秒超时
+				let loadPromiseResolved = false
+
+				const loadPromise = client.getDirectoryContents(path).then((result) => {
+					loadPromiseResolved = true
+					return result
 				})
 
-				// 获取文件列表，带超时处理
-				const contents = await Promise.race([client.getDirectoryContents(path), timeoutPromise])
+				// 使用setTimeout替代Promise.race，避免复杂的Promise处理
+				const timeoutId = setTimeout(() => {
+					if (!loadPromiseResolved) {
+						throw new Error('加载文件列表超时')
+					}
+				}, 15000)
+
+				// 获取文件列表
+				const contents = await loadPromise
+				clearTimeout(timeoutId)
 
 				if (!contents || !Array.isArray(contents)) {
 					logError('WebDAV返回的文件列表格式不正确')

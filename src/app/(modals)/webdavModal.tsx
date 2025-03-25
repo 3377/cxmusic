@@ -17,6 +17,7 @@ import React, { useCallback, useEffect, useState } from 'react'
 import {
 	ActivityIndicator,
 	Alert,
+	BackHandler,
 	FlatList,
 	Modal,
 	StyleSheet,
@@ -25,17 +26,19 @@ import {
 	TextInput,
 	TouchableOpacity,
 	View,
-	BackHandler,
 } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
-import { GestureHandlerRootView, PanGestureHandler } from 'react-native-gesture-handler'
-import Animated, { 
-	useAnimatedGestureHandler, 
-	useAnimatedStyle, 
-	useSharedValue, 
-	withTiming,
-	runOnJS
-} from 'react-native-reanimated'
+
+// 尝试导入手势组件，但不强制要求，使用条件渲染
+let GestureHandler = null
+let Animated = null
+try {
+	const RNGestureHandler = require('react-native-gesture-handler')
+	GestureHandler = RNGestureHandler.PanGestureHandler
+	Animated = require('react-native-reanimated')
+} catch (error) {
+	logError('手势库加载失败，将使用备用关闭模式', error)
+}
 
 // 错误边界组件
 class ErrorBoundary extends React.Component {
@@ -504,9 +507,7 @@ const WebDAVModal = () => {
 	const [isComponentMounted, setIsComponentMounted] = useState(false)
 	const [loadError, setLoadError] = useState<string | null>(null)
 	const [error, setError] = useState<string | null>(null)
-
-	// 添加手势控制的动画值
-	const translateY = useSharedValue(0)
+	const [startY, setStartY] = useState(0)
 
 	// 组件挂载状态管理
 	useEffect(() => {
@@ -716,227 +717,165 @@ const WebDAVModal = () => {
 		}
 	}, [modalVisible, router])
 
-	// 添加滑动关闭处理
-	const gestureHandler = useAnimatedGestureHandler({
-		onStart: (_, ctx) => {
-			ctx.startY = translateY.value
-		},
-		onActive: (event, ctx) => {
-			// 只允许向下滑动
-			if (event.translationY > 0) {
-				translateY.value = ctx.startY + event.translationY
-			}
-		},
-		onEnd: (event) => {
-			// 如果滑动超过一定距离，关闭模态窗口
-			if (event.translationY > 100) {
-				translateY.value = withTiming(500, { duration: 300 }, () => {
-					runOnJS(handleGoBack)()
-				})
-			} else {
-				// 否则恢复原位
-				translateY.value = withTiming(0, { duration: 200 })
-			}
-		},
-	})
-
-	const animatedStyle = useAnimatedStyle(() => {
-		return {
-			transform: [{ translateY: translateY.value }],
-		}
-	})
-
-	const renderItem = useCallback(
-		({ item }) => {
-			if (!item) return null
-
-			try {
-				return (
-					<ServerItem
-						server={item}
-						onEdit={handleEditServer}
-						onDelete={handleDeleteServer}
-						onSetDefault={handleSetDefault}
-						onTest={handleTestServer}
-						isCurrentServer={currentServerState?.id === item.id}
-					/>
-				)
-			} catch (error) {
-				logError('渲染服务器项失败:', error)
-				return null
-			}
-		},
-		[handleEditServer, handleDeleteServer, handleSetDefault, handleTestServer, currentServerState],
-	)
-
-	// 刷新服务器列表
-	const handleRefresh = useCallback(() => {
-		if (!isComponentMounted) return
-		logInfo('WebDAV设置: 手动刷新服务器列表')
-		loadServers()
-	}, [isComponentMounted, loadServers])
-
-	// 渲染加载中状态
-	if (isLoading) {
-		return (
-			<View style={styles.container}>
-				<View style={styles.header}>
-					<TouchableOpacity
-						style={styles.backButton}
-						onPress={() => router.back()}
-						hitSlop={{ top: 20, bottom: 20, left: 20, right: 20 }}
-					>
-						<Ionicons name="arrow-back" size={24} color={colors.text} />
-					</TouchableOpacity>
-					<Text style={styles.title}>WebDAV设置</Text>
-					<TouchableOpacity
-						style={styles.refreshButton}
-						onPress={handleRefresh}
-						disabled={isLoading}
-					>
-						<Feather name="refresh-cw" size={20} color={colors.text} />
-					</TouchableOpacity>
-				</View>
-
-				<View style={styles.loadingContainer}>
-					<ActivityIndicator size="large" color={colors.primary} />
-					<Text style={styles.loadingText}>加载中...</Text>
-				</View>
-			</View>
-		)
+	// 处理触摸开始
+	const handleTouchStart = (event) => {
+		setStartY(event.nativeEvent.pageY)
 	}
 
-	// 渲染错误状态
-	if (loadError) {
-		return (
-			<View style={styles.container}>
-				<View style={styles.header}>
-					<TouchableOpacity
-						style={styles.backButton}
-						onPress={() => router.back()}
-						hitSlop={{ top: 20, bottom: 20, left: 20, right: 20 }}
-					>
-						<Ionicons name="arrow-back" size={24} color={colors.text} />
-					</TouchableOpacity>
-					<Text style={styles.title}>WebDAV设置</Text>
-					<TouchableOpacity
-						style={styles.refreshButton}
-						onPress={handleRefresh}
-						disabled={isLoading}
-					>
-						<Feather name="refresh-cw" size={20} color={colors.text} />
-					</TouchableOpacity>
-				</View>
+	// 处理触摸移动
+	const handleTouchMove = (event) => {
+		const currentY = event.nativeEvent.pageY
+		const distance = currentY - startY
 
-				<View style={styles.errorContainer}>
-					<Feather name="alert-triangle" size={48} color="red" />
-					<Text style={styles.errorText}>{loadError}</Text>
-					<TouchableOpacity style={styles.retryButton} onPress={handleRefresh}>
-						<Text style={styles.retryButtonText}>重试</Text>
-					</TouchableOpacity>
+		// 如果下滑超过100像素，关闭模态窗口
+		if (distance > 100) {
+			handleGoBack()
+		}
+	}
+
+	// 渲染容器，根据是否有手势库使用不同实现
+	const renderContainer = (children) => {
+		if (GestureHandler && Animated) {
+			// 使用第三方手势库实现
+			try {
+				const animatedStyles = {
+					transform: [{ translateY: 0 }],
+				}
+
+				return (
+					<View style={{ flex: 1 }}>
+						<GestureHandler
+							onGestureEvent={(event) => {
+								if (event.nativeEvent.translationY > 100) {
+									handleGoBack()
+								}
+							}}
+						>
+							<Animated.View style={[styles.container, { paddingTop: insets.top }, animatedStyles]}>
+								{children}
+							</Animated.View>
+						</GestureHandler>
+					</View>
+				)
+			} catch (error) {
+				logError('手势处理渲染失败，使用备用方式', error)
+				// 发生错误时使用备用方式
+				return (
+					<View
+						style={[styles.container, { paddingTop: insets.top }]}
+						onTouchStart={handleTouchStart}
+						onTouchMove={handleTouchMove}
+					>
+						{children}
+					</View>
+				)
+			}
+		} else {
+			// 使用基本触摸处理作为备用
+			return (
+				<View
+					style={[styles.container, { paddingTop: insets.top }]}
+					onTouchStart={handleTouchStart}
+					onTouchMove={handleTouchMove}
+				>
+					{children}
 				</View>
-			</View>
-		)
+			)
+		}
 	}
 
 	// 如果没有服务器，显示添加服务器的引导信息
 	if (!servers || !Array.isArray(servers) || servers.length === 0) {
-		return (
-			<GestureHandlerRootView style={{ flex: 1 }}>
-				<PanGestureHandler onGestureEvent={gestureHandler}>
-					<Animated.View style={[styles.container, { paddingTop: insets.top }, animatedStyle]}>
-						<View style={styles.header}>
-							<Text style={styles.headerTitle}>WebDAV 服务器</Text>
-							<TouchableOpacity
-								style={styles.closeButton}
-								onPress={handleGoBack}
-								hitSlop={{ top: 10, right: 10, bottom: 10, left: 10 }}
-							>
-								<Ionicons name="close" size={24} color={colors.text} />
-							</TouchableOpacity>
-						</View>
+		return renderContainer(
+			<>
+				<View style={styles.header}>
+					<Text style={styles.headerTitle}>WebDAV 服务器</Text>
+					<TouchableOpacity
+						style={styles.closeButton}
+						onPress={handleGoBack}
+						hitSlop={{ top: 10, right: 10, bottom: 10, left: 10 }}
+					>
+						<Ionicons name="close" size={24} color={colors.text} />
+					</TouchableOpacity>
+				</View>
 
-						<View style={styles.emptyContainer}>
-							<Ionicons name="cloud-outline" size={80} color="#999" />
-							<Text style={styles.emptyTitle}>没有添加 WebDAV 服务器</Text>
-							<Text style={styles.emptySubtitle}>
-								添加一个 WebDAV 服务器来访问和播放您的云端音乐文件
-							</Text>
-							<TouchableOpacity style={styles.addButton} onPress={handleAddServer}>
-								<Ionicons name="add" size={24} color="#fff" />
-								<Text style={styles.addButtonText}>添加服务器</Text>
-							</TouchableOpacity>
-						</View>
+				<View style={styles.emptyContainer}>
+					<Ionicons name="cloud-outline" size={80} color="#999" />
+					<Text style={styles.emptyTitle}>没有添加 WebDAV 服务器</Text>
+					<Text style={styles.emptySubtitle}>
+						添加一个 WebDAV 服务器来访问和播放您的云端音乐文件
+					</Text>
+					<TouchableOpacity style={styles.addButton} onPress={handleAddServer}>
+						<Ionicons name="add" size={24} color="#fff" />
+						<Text style={styles.addButtonText}>添加服务器</Text>
+					</TouchableOpacity>
+				</View>
 
-						<ServerEditModal
-							isVisible={modalVisible}
-							onClose={handleCloseModal}
-							initialServer={selectedServer}
-							loadServers={loadServers}
-						/>
-					</Animated.View>
-				</PanGestureHandler>
-			</GestureHandlerRootView>
+				<ServerEditModal
+					isVisible={modalVisible}
+					onClose={handleCloseModal}
+					initialServer={selectedServer}
+					loadServers={loadServers}
+				/>
+			</>,
 		)
 	}
 
 	return (
 		<ErrorBoundary>
-			<GestureHandlerRootView style={{ flex: 1 }}>
-				<PanGestureHandler onGestureEvent={gestureHandler}>
-					<Animated.View style={[styles.container, { paddingTop: insets.top }, animatedStyle]}>
-						<View style={styles.header}>
-							<Text style={styles.headerTitle}>WebDAV 服务器</Text>
-							<TouchableOpacity
-								style={styles.closeButton}
-								onPress={handleGoBack}
-								hitSlop={{ top: 10, right: 10, bottom: 10, left: 10 }}
-							>
-								<Ionicons name="close" size={24} color={colors.text} />
-							</TouchableOpacity>
+			{renderContainer(
+				<>
+					<View style={styles.header}>
+						<Text style={styles.headerTitle}>WebDAV 服务器</Text>
+						<TouchableOpacity
+							style={styles.closeButton}
+							onPress={handleGoBack}
+							hitSlop={{ top: 10, right: 10, bottom: 10, left: 10 }}
+						>
+							<Ionicons name="close" size={24} color={colors.text} />
+						</TouchableOpacity>
+					</View>
+
+					<View style={styles.actionContainer}>
+						<TouchableOpacity style={styles.addButton} onPress={handleAddServer}>
+							<Text style={styles.addButtonText}>添加服务器</Text>
+						</TouchableOpacity>
+					</View>
+
+					{isLoading ? (
+						<View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
+							<ActivityIndicator size="large" color={colors.accent} />
+							<Text style={{ marginTop: 20, fontSize: 16 }}>加载中...</Text>
 						</View>
-
-						<View style={styles.actionContainer}>
-							<TouchableOpacity style={styles.addButton} onPress={handleAddServer}>
-								<Text style={styles.addButtonText}>添加服务器</Text>
-							</TouchableOpacity>
+					) : servers.length === 0 ? (
+						<View style={styles.emptyContainer}>
+							<Text style={styles.emptyText}>没有WebDAV服务器</Text>
+							<Text style={styles.emptySubtext}>点击上方的"添加服务器"按钮添加一个服务器</Text>
 						</View>
-
-						{isLoading ? (
-							<View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
-								<ActivityIndicator size="large" color={colors.accent} />
-								<Text style={{ marginTop: 20, fontSize: 16 }}>加载中...</Text>
-							</View>
-						) : servers.length === 0 ? (
-							<View style={styles.emptyContainer}>
-								<Text style={styles.emptyText}>没有WebDAV服务器</Text>
-								<Text style={styles.emptySubtext}>点击上方的"添加服务器"按钮添加一个服务器</Text>
-							</View>
-						) : (
-							<FlatList
-								data={servers}
-								renderItem={renderItem}
-								keyExtractor={(item) => item?.id || Math.random().toString()}
-								contentContainerStyle={styles.listContainer}
-								ItemSeparatorComponent={() => <View style={styles.separator} />}
-								ListEmptyComponent={
-									<View style={styles.emptyContainer}>
-										<Text style={styles.emptyText}>没有WebDAV服务器</Text>
-										<Text style={styles.emptySubtext}>点击上方的"添加服务器"按钮添加一个服务器</Text>
-									</View>
-								}
-							/>
-						)}
-
-						<ServerEditModal
-							isVisible={modalVisible}
-							onClose={handleCloseModal}
-							initialServer={selectedServer}
-							loadServers={loadServers}
+					) : (
+						<FlatList
+							data={servers}
+							renderItem={renderItem}
+							keyExtractor={(item) => item?.id || Math.random().toString()}
+							contentContainerStyle={styles.listContainer}
+							ItemSeparatorComponent={() => <View style={styles.separator} />}
+							ListEmptyComponent={
+								<View style={styles.emptyContainer}>
+									<Text style={styles.emptyText}>没有WebDAV服务器</Text>
+									<Text style={styles.emptySubtext}>点击上方的"添加服务器"按钮添加一个服务器</Text>
+								</View>
+							}
 						/>
-					</Animated.View>
-				</PanGestureHandler>
-			</GestureHandlerRootView>
+					)}
+
+					<ServerEditModal
+						isVisible={modalVisible}
+						onClose={handleCloseModal}
+						initialServer={selectedServer}
+						loadServers={loadServers}
+					/>
+				</>,
+			)}
 		</ErrorBoundary>
 	)
 }

@@ -54,14 +54,6 @@
 						"NSExtensionActivationSupportsText": 1
 					}
 				}
-			],
-			"react-native-gesture-handler",
-			[
-				"react-native-reanimated",
-				{
-					"relativeSourcePath": "../node_modules/react-native-reanimated",
-					"disablePresetAdjustments": false
-				}
 			]
 		],
 		"experiments": {

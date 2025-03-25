@@ -113,38 +113,25 @@ export async function setupWebDAV(): Promise<void> {
 		webdavClient = null
 		currentServer = null
 
-		// 设置超时保护
-		const timeoutPromise = new Promise((_, reject) => {
-			setTimeout(() => {
-				reject(new Error('初始化超时'))
-			}, 10000) // 10秒超时
-		})
-
 		// 尝试加载服务器列表
 		try {
-			// 使用竞速模式加载服务器列表
-			await Promise.race([
-				(async () => {
-					const serversJson = await AsyncStorage.getItem(WEBDAV_SERVERS_KEY)
-					if (serversJson) {
-						try {
-							servers = JSON.parse(serversJson)
-							if (!Array.isArray(servers)) {
-								logError('WebDAV服务器数据格式错误，重置为空列表')
-								servers = []
-							}
-							logInfo(`已加载${servers.length}个WebDAV服务器配置`)
-						} catch (parseError) {
-							logError('解析WebDAV服务器列表JSON失败:', parseError)
-							servers = []
-						}
-					} else {
-						logInfo('无保存的WebDAV服务器配置')
+			const serversJson = await AsyncStorage.getItem(WEBDAV_SERVERS_KEY)
+			if (serversJson) {
+				try {
+					servers = JSON.parse(serversJson)
+					if (!Array.isArray(servers)) {
+						logError('WebDAV服务器数据格式错误，重置为空列表')
 						servers = []
 					}
-				})(),
-				timeoutPromise,
-			])
+					logInfo(`已加载${servers.length}个WebDAV服务器配置`)
+				} catch (parseError) {
+					logError('解析WebDAV服务器列表JSON失败:', parseError)
+					servers = []
+				}
+			} else {
+				logInfo('无保存的WebDAV服务器配置')
+				servers = []
+			}
 		} catch (loadError) {
 			logError('加载WebDAV服务器列表失败:', loadError)
 			// 即使加载失败，也继续执行，使用空列表

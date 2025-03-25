@@ -85,7 +85,9 @@ class ErrorBoundary extends React.Component {
 					</TouchableOpacity>
 					<TouchableOpacity
 						onPress={() => {
-							this.props.navigation?.goBack() || this.props.router?.back()
+							this.props.navigation?.goBack() ||
+								this.props.router?.back() ||
+								(typeof window !== 'undefined' && window.history && window.history.back())
 						}}
 						style={{
 							marginTop: 12,
@@ -158,15 +160,27 @@ export default function WebDavLayout() {
 			setIsLoading(true)
 			setInitError(null)
 
-			// 设置超时保护，防止无响应
-			const timeoutPromise = new Promise((_, reject) => {
-				setTimeout(() => {
-					reject(new Error('初始化WebDAV服务超时'))
-				}, 10000) // 10秒超时
+			// 设置超时保护
+			let initPromiseResolved = false
+
+			const initPromise = setupWebDAV().then((result) => {
+				initPromiseResolved = true
+				return result
 			})
 
-			// 等待WebDAV服务初始化，带超时处理
-			await Promise.race([setupWebDAV(), timeoutPromise])
+			// 使用setTimeout替代Promise.race，避免复杂的Promise处理
+			const timeoutId = setTimeout(() => {
+				if (!initPromiseResolved) {
+					setInitError('初始化WebDAV服务超时')
+					setIsInitialized(true)
+					setIsLoading(false)
+					setIsInitializing(false)
+				}
+			}, 10000)
+
+			// 等待WebDAV服务初始化
+			await initPromise
+			clearTimeout(timeoutId)
 
 			// 短暂延迟以确保UI状态更新
 			setTimeout(() => {
