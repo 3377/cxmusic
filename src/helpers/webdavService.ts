@@ -81,7 +81,7 @@ export function subscribeToWebDAVStatus(callback: Subscriber): () => void {
 function notifySubscribers(): void {
 	try {
 		// 添加防御性检查
-		const subscribersCopy = [...subscribers];
+		const subscribersCopy = [...subscribers]
 		subscribersCopy.forEach((callback) => {
 			try {
 				callback()
@@ -216,14 +216,14 @@ export async function setupWebDAV(): Promise<void> {
 		// 重置状态
 		webdavClient = null
 		currentServer = null
-		
+
 		// 即使出错也安全地通知订阅者
 		try {
 			notifySubscribers()
 		} catch (notifyError) {
 			logError('通知WebDAV初始化失败错误:', notifyError)
 		}
-		
+
 		// 抛出异常以便上层捕获
 		throw error
 	}
@@ -254,7 +254,7 @@ export async function connectToServer(server: WebDAVServer): Promise<void> {
 		}
 
 		// 创建WebDAV客户端
-		let client;
+		let client
 		try {
 			client = createClient(server.url, clientOptions)
 		} catch (clientError) {
@@ -436,48 +436,122 @@ export async function deleteWebDAVServer(id: string): Promise<void> {
 }
 
 /**
- * 获取WebDAV目录内容
- * @param path 服务器上的路径，默认为根目录
- * @param options 选项
+ * 获取指定目录的内容
+ * @param path 目录路径
+ * @param options 选项，如是否只显示音乐文件
+ * @returns 目录内容列表
  */
-export async function getDirectoryContents(
-	path: string = '/',
-	options: { onlyMusic?: boolean } = {},
-): Promise<WebDAVFile[]> {
-	if (!webdavClient || !currentServer) {
-		throw new Error('WebDAV客户端未连接')
-	}
+export const getDirectoryContents = async (path: string, options: { onlyMusic?: boolean } = {}) => {
+	const { onlyMusic = false } = options
+	const MAX_RETRIES = 2 // 最大重试次数
+	const TIMEOUT_MS = 8000 // 8秒超时
+	let retries = 0
 
-	try {
-		const contents = await webdavClient.getDirectoryContents(path)
+	while (retries <= MAX_RETRIES) {
+		const client = await getClient()
 
-		// 过滤并转换结果
-		return contents
-			.filter((item) => {
-				if (options.onlyMusic) {
-					// 如果只要音乐文件，过滤出音频文件和目录
-					return (
-						item.type === 'directory' ||
-						(item.mime && item.mime.startsWith('audio/')) ||
-						/\.(mp3|flac|wav|ogg|m4a|aac)$/i.test(item.basename)
-					)
+		// 如果未连接，尝试重新连接
+		if (!client) {
+			logError(`WebDAV未连接，尝试重新连接 (尝试 ${retries + 1}/${MAX_RETRIES + 1})`)
+			const server = getCurrentWebDAVServer()
+			if (!server) {
+				throw new Error('未配置WebDAV服务器')
+			}
+
+			try {
+				await createClient(server)
+				logInfo('WebDAV重新连接成功')
+			} catch (connError) {
+				logError('WebDAV重新连接失败:', connError)
+				retries++
+				// 最后一次尝试失败时抛出错误
+				if (retries > MAX_RETRIES) {
+					throw new Error('无法连接到WebDAV服务器，请检查网络连接和服务器配置')
 				}
-				return true
+				// 等待短暂时间后重试
+				await new Promise((r) => setTimeout(r, 1000))
+				continue
+			}
+		}
+
+		try {
+			// 添加超时处理
+			const timeoutPromise = new Promise((_, reject) => {
+				setTimeout(() => {
+					reject(new Error('请求超时，请检查网络连接'))
+				}, TIMEOUT_MS)
 			})
-			.map((item) => ({
-				filename: item.filename,
-				basename: item.basename,
-				lastmod: item.lastmod,
-				size: item.size,
-				type: item.type,
-				mime: item.mime,
-				etag: item.etag,
-				path: path === '/' ? `/${item.basename}` : `${path}/${item.basename}`,
-			}))
-	} catch (error) {
-		logError(`获取WebDAV目录内容失败 (${path}):`, error)
-		throw error
+
+			// 并行运行实际请求和超时检查
+			const contents = (await Promise.race([
+				client.getDirectoryContents(path),
+				timeoutPromise,
+			])) as any
+
+			if (!contents || !Array.isArray(contents)) {
+				logError('WebDAV返回内容无效:', contents)
+				throw new Error('服务器返回数据无效')
+			}
+
+			// 过滤隐藏文件 (以.开头的文件)
+			let filteredContents = contents.filter((item) => !item.basename.startsWith('.'))
+
+			// 如果需要，只返回音乐文件
+			if (onlyMusic) {
+				filteredContents = filteredContents.filter(
+					(item) =>
+						item.type === 'directory' ||
+						item.mime.startsWith('audio/') ||
+						/\.(mp3|flac|wav|ogg|m4a|aac)$/i.test(item.basename),
+				)
+			}
+
+			logInfo(`WebDAV: 成功获取"${path}"目录内容，共${filteredContents.length}项`)
+			return filteredContents
+		} catch (error) {
+			if (error.status === 401) {
+				logError('WebDAV认证失败:', error)
+				throw new Error('WebDAV认证失败，请检查用户名和密码')
+			}
+
+			if (error.status === 404) {
+				logError('WebDAV路径不存在:', error)
+				throw new Error(`路径"${path}"不存在`)
+			}
+
+			if (error.status === 403) {
+				logError('WebDAV访问被拒绝:', error)
+				throw new Error('无权访问此目录，请检查权限设置')
+			}
+
+			// 特定的网络错误处理
+			if (error.code === 'ENOTFOUND') {
+				logError('WebDAV服务器无法访问:', error)
+				throw new Error('服务器无法访问，请检查服务器地址或网络连接')
+			}
+
+			if (error.code === 'ECONNREFUSED') {
+				logError('WebDAV连接被拒绝:', error)
+				throw new Error('连接被拒绝，请检查服务器地址和端口')
+			}
+
+			logError(`WebDAV获取目录内容失败 (尝试 ${retries + 1}/${MAX_RETRIES + 1}):`, error)
+
+			// 尝试重试
+			retries++
+			if (retries <= MAX_RETRIES) {
+				// 等待短暂时间后重试
+				await new Promise((r) => setTimeout(r, 1000))
+				continue
+			}
+
+			// 所有重试都失败了，抛出友好错误
+			throw new Error(error.message || '无法获取文件列表，请检查网络连接或服务器配置')
+		}
 	}
+
+	// 如果所有尝试都失败，发送通用错误
+	throw new Error('无法获取文件列表，请检查网络连接或服务器配置')
 }
 
 /**
@@ -703,57 +777,59 @@ export function useCurrentWebDAVServer() {
 
 /**
  * 验证WebDAV连接
- * @param server WebDAV服务器配置
+ * @param server WebDAV服务器信息
  * @returns 连接是否成功
  */
-export async function verifyWebDAVConnection(server: WebDAVServer): Promise<boolean> {
+export const verifyWebDAVConnection = async (server: WebDAVServer): Promise<boolean> => {
+	let tempClient = null
+	const VERIFY_TIMEOUT = 5000 // 5秒超时
+
 	try {
-		if (!server || !server.url) {
-			return false
-		}
-
-		// 创建临时WebDAV客户端
-		const clientOptions: WebDAVClientOptions = {
-			username: server.username || '',
-			password: server.password || '',
-			maxBodyLength: 1024 * 1024 * 10, // 10MB
-			maxContentLength: 1024 * 1024 * 10, // 10MB
-		}
-
-		// 创建客户端可能会失败
-		let client;
-		try {
-			client = createClient(server.url, clientOptions)
-		} catch (e) {
-			logError('创建WebDAV客户端验证失败:', e)
-			return false
-		}
-
-		if (!client) {
-			return false
-		}
-
-		// 设置短超时时间
-		const timeoutPromise = new Promise<boolean>((_, reject) => {
-			setTimeout(() => reject(new Error('验证连接超时')), 5000)
+		const timeoutPromise = new Promise((_, reject) => {
+			setTimeout(() => {
+				reject(new Error('连接超时'))
+			}, VERIFY_TIMEOUT)
 		})
 
-		// 测试连接
-		const testPromise = (async () => {
-			try {
-				await client.getDirectoryContents('/')
-				return true
-			} catch (e) {
-				logError('验证WebDAV连接失败:', e)
-				return false
-			}
-		})()
+		// 创建临时客户端进行连接测试
+		tempClient = createWebdavClient({
+			baseURL: server.url,
+			username: server.username,
+			password: server.password,
+			headers: { 'Cache-Control': 'no-cache' },
+		})
 
-		// 使用Promise.race处理超时
-		return await Promise.race([testPromise, timeoutPromise])
+		// 使用超时Promise竞争
+		await Promise.race([tempClient.getDirectoryContents('/'), timeoutPromise])
+
+		// 如果没有抛出错误，则连接成功
+		logInfo(`WebDAV连接验证成功: ${server.url}`)
+		return true
 	} catch (error) {
-		logError('验证WebDAV连接时发生错误:', error)
-		return false
+		logError('WebDAV连接验证失败:', error)
+
+		// 根据错误类型提供更详细的信息
+		let errorMessage = '连接失败'
+
+		if (error.status === 401) {
+			errorMessage = '认证失败，请检查用户名和密码'
+		} else if (error.status === 404) {
+			errorMessage = '路径不存在'
+		} else if (error.status === 403) {
+			errorMessage = '访问被拒绝，请检查权限'
+		} else if (error.code === 'ENOTFOUND') {
+			errorMessage = '服务器无法访问，请检查服务器地址或网络连接'
+		} else if (error.code === 'ECONNREFUSED') {
+			errorMessage = '连接被拒绝，请检查服务器地址和端口'
+		} else if (error.message.includes('timeout')) {
+			errorMessage = '连接超时，请检查网络连接或服务器状态'
+		}
+
+		// 记录错误信息供调试
+		logError(`WebDAV连接验证失败: ${errorMessage}`)
+
+		// 抛出详细的错误供UI显示
+		throw new Error(errorMessage)
 	}
 }
 
@@ -761,18 +837,18 @@ export async function verifyWebDAVConnection(server: WebDAVServer): Promise<bool
  * 检查WebDAV服务状态
  * 这是一个安全的方法，即使失败也不会抛出异常
  */
-export function checkWebDAVStatus(): { isConnected: boolean, server: WebDAVServer | null } {
+export function checkWebDAVStatus(): { isConnected: boolean; server: WebDAVServer | null } {
 	try {
 		logInfo('检查WebDAV服务状态')
 		return {
 			isConnected: webdavClient !== null,
-			server: currentServer
+			server: currentServer,
 		}
 	} catch (error) {
 		logError('检查WebDAV服务状态失败:', error)
 		return {
 			isConnected: false,
-			server: null
+			server: null,
 		}
 	}
 }
