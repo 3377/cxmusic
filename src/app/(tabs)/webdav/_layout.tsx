@@ -150,77 +150,109 @@ function LoadingView() {
 
 export default function WebDavLayout() {
 	const router = useRouter()
-	const [isLoading, setIsLoading] = useState(true)
+	const [isLoading, setIsLoading] = useState(false)
 	const [initError, setInitError] = useState(null)
 	const [retryCount, setRetryCount] = useState(0)
 	const [isMounted, setIsMounted] = useState(true)
+	const [isInitialized, setIsInitialized] = useState(false)
 	const currentServer = useCurrentWebDAVServer()
 
-	// 简化的WebDAV初始化
+	// 简化的WebDAV初始化 - 改进加载逻辑，避免阻塞渲染
 	useEffect(() => {
 		// 防止组件卸载后的状态更新
 		setIsMounted(true)
-
+		
+		// 注意：不预先设置加载状态，先让界面渲染出来
+		// 这是关键修复 - 确保用户界面先渲染，然后再执行初始化
+		
 		// 确保不会被第二次WebDAV状态检查阻塞UI
 		let isSafeToUpdate = true
-
+		
 		// 如果组件还挂载着，执行初始化
 		if (isMounted) {
-			// 初始化函数
-			const initWebDAV = async () => {
-				try {
-					logInfo(`WebDAV布局: 开始初始化WebDAV服务 (尝试 ${retryCount + 1})`)
-					setIsLoading(true)
-					setInitError(null)
-
-					// 设置超时保护
-					let initTimeout = setTimeout(() => {
-						if (isMounted && isSafeToUpdate) {
-							setInitError('初始化WebDAV服务超时，请检查网络连接')
-							setIsLoading(false)
-						}
-					}, 10000)
-
-					// 初始化WebDAV
-					await setupWebDAV()
-
-					// 清除超时
-					clearTimeout(initTimeout)
-
-					// 在安全的上下文中检查WebDAV状态，不依赖TrackPlayer
+			// 使用requestAnimationFrame确保界面先渲染
+			requestAnimationFrame(() => {
+				// 异步初始化函数，避免阻塞UI线程
+				const initWebDAV = async () => {
 					try {
-						const status = checkWebDAVStatus();
-						logInfo(`WebDAV布局: 当前连接状态: ${status.isConnected ? '已连接' : '未连接'}`);
-					} catch (statusError) {
-						// 静默处理状态检查错误，不阻塞UI更新
-						logError('WebDAV布局: 状态检查失败 (忽略)', statusError);
-					}
+						// 注意：只有在初始化开始后才设置加载状态
+						if (isMounted && isSafeToUpdate) {
+							setIsLoading(true)
+						}
+						
+						logInfo(`WebDAV布局: 开始初始化WebDAV服务 (尝试 ${retryCount + 1})`)
+						setInitError(null)
 
-					// 如果组件仍然挂载，更新状态
-					if (isMounted && isSafeToUpdate) {
-						setIsLoading(false)
-						logInfo('WebDAV布局: WebDAV服务初始化完成')
-					}
-				} catch (error) {
-					logError('WebDAV布局: 初始化WebDAV服务失败', error)
+						// 设置超时保护
+						let initTimeout = setTimeout(() => {
+							if (isMounted && isSafeToUpdate) {
+								setInitError('初始化WebDAV服务超时，请检查网络连接')
+								setIsLoading(false)
+								setIsInitialized(true) // 尽管超时，也标记为已初始化
+							}
+						}, 10000)
 
-					// 如果组件仍然挂载，更新错误状态
-					if (isMounted && isSafeToUpdate) {
-						setInitError(error.message || '初始化WebDAV服务失败')
-						setIsLoading(false)
+						// 初始化WebDAV - 使用更轻量的实现
+						try {
+							await setupWebDAV()
+							
+							// 成功初始化后
+							if (isMounted && isSafeToUpdate) {
+								// 检查WebDAV状态，但不阻塞UI
+								try {
+									const status = checkWebDAVStatus();
+									logInfo(`WebDAV布局: 当前连接状态: ${status.isConnected ? '已连接' : '未连接'}`);
+								} catch (statusError) {
+									// 静默处理状态检查错误，不中断流程
+									logError('WebDAV布局: 状态检查失败 (忽略)', statusError);
+								}
+							}
+						} catch (setupError) {
+							logError('WebDAV服务初始化失败:', setupError)
+							// 错误处理，但继续执行以避免黑屏
+							if (isMounted && isSafeToUpdate) {
+								setInitError(setupError.message || '初始化WebDAV服务失败')
+							}
+						}
 
-						// 自动重试（最多3次）
-						if (retryCount < 3) {
-							setTimeout(() => {
-								if (isMounted) setRetryCount((prev) => prev + 1)
-							}, 2000)
+						// 清除超时
+						clearTimeout(initTimeout)
+
+						// 更新状态，初始化完成
+						if (isMounted && isSafeToUpdate) {
+							setIsLoading(false)
+							setIsInitialized(true)
+							logInfo('WebDAV布局: WebDAV服务初始化完成')
+						}
+					} catch (error) {
+						logError('WebDAV布局: 初始化WebDAV服务失败', error)
+
+						// 如果组件仍然挂载，更新错误状态
+						if (isMounted && isSafeToUpdate) {
+							setInitError(error.message || '初始化WebDAV服务失败')
+							setIsLoading(false)
+							setIsInitialized(true) // 尽管失败，也标记为已初始化，避免UI阻塞
+
+							// 自动重试（最多3次）
+							if (retryCount < 3) {
+								setTimeout(() => {
+									if (isMounted) setRetryCount((prev) => prev + 1)
+								}, 2000)
+							}
 						}
 					}
 				}
-			}
 
-			// 执行初始化
-			initWebDAV()
+				// 执行异步初始化，但不等待结果
+				initWebDAV().catch(error => {
+					// 捕获任何未处理的异常
+					logError('WebDAV布局: 未捕获的初始化错误', error)
+					if (isMounted && isSafeToUpdate) {
+						setIsLoading(false)
+						setIsInitialized(true)
+					}
+				})
+			})
 
 			// 订阅WebDAV状态变更 - 使用错误处理包装回调
 			const unsubscribe = subscribeToWebDAVStatus(() => {
@@ -280,7 +312,7 @@ export default function WebDavLayout() {
 	}
 
 	// 如果WebDAV服务初始化失败，显示错误信息和重试按钮
-	if (initError) {
+	if (isInitialized && initError) {
 		return (
 			<View
 				style={{
@@ -323,13 +355,13 @@ export default function WebDavLayout() {
 		)
 	}
 
-	// 如果正在加载，显示加载状态
-	if (isLoading) {
+	// 如果正在加载，显示加载状态 - 仅在已初始化后显示加载状态
+	if (isInitialized && isLoading) {
 		return <LoadingView />
 	}
 
-	// 如果未配置WebDAV服务器，显示提示消息
-	if (!currentServer) {
+	// 如果未配置WebDAV服务器，显示提示消息 - 只有在初始化完成后显示
+	if (isInitialized && !currentServer) {
 		return (
 			<View
 				style={{
@@ -362,62 +394,34 @@ export default function WebDavLayout() {
 		)
 	}
 
-	// 正常渲染WebDAV页面
-	try {
-		return (
-			<ErrorBoundary router={router}>
-				<Stack
-					screenOptions={{
-						headerShown: true,
-						headerStyle: {
-							backgroundColor: colors.background,
-						},
-						headerTitleStyle: {
-							color: colors.text,
-						},
-						headerTintColor: colors.primary,
-						contentStyle: {
-							backgroundColor: colors.background,
-						},
-						headerRight: () => <SafeHeaderButton onPress={handleSettingsPress} />,
-					}}
-				>
-					<Stack.Screen 
-						name="index" 
-						options={{ 
-							title: 'WebDAV 云音乐',
-							headerTitleAlign: 'center', // 居中标题
-						}} 
-					/>
-				</Stack>
-			</ErrorBoundary>
-		)
-	} catch (renderError) {
-		logError('WebDAV布局: 渲染失败', renderError)
-		return (
-			<View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: colors.background }}>
-				<Feather name="alert-triangle" size={48} color="red" />
-				<Text style={{ marginTop: 16, color: colors.text, textAlign: 'center', fontSize: 16 }}>
-					WebDAV页面加载失败
-				</Text>
-				<TouchableOpacity
-					onPress={() => {
-						try {
-							router.replace('/(tabs)/')
-						} catch (navError) {
-							logError('返回主页失败', navError)
-						}
-					}}
-					style={{
-						marginTop: 16,
-						backgroundColor: colors.primary,
-						padding: 12,
-						borderRadius: 8,
-					}}
-				>
-					<Text style={{ color: '#fff' }}>返回主页</Text>
-				</TouchableOpacity>
-			</View>
-		)
-	}
+	// 立即渲染一个基本UI - 不论是否初始化完成
+	// 这是避免黑屏的关键
+	return (
+		<ErrorBoundary router={router}>
+			<Stack
+				screenOptions={{
+					headerShown: true,
+					headerStyle: {
+						backgroundColor: colors.background,
+					},
+					headerTitleStyle: {
+						color: colors.text,
+					},
+					headerTintColor: colors.primary,
+					contentStyle: {
+						backgroundColor: colors.background,
+					},
+					headerRight: () => <SafeHeaderButton onPress={handleSettingsPress} />,
+				}}
+			>
+				<Stack.Screen 
+					name="index" 
+					options={{ 
+						title: 'WebDAV 云音乐',
+						headerTitleAlign: 'center', // 居中标题
+					}} 
+				/>
+			</Stack>
+		</ErrorBoundary>
+	)
 }

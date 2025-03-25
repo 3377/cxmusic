@@ -239,7 +239,7 @@ export default function WebDavScreen() {
 	const router = useRouter()
 	const [currentPath, setCurrentPath] = useState('/')
 	const [files, setFiles] = useState([])
-	const [isLoading, setIsLoading] = useState(true)
+	const [isLoading, setIsLoading] = useState(false) // 改为默认非加载状态
 	const [error, setError] = useState(null)
 	const [refreshKey, setRefreshKey] = useState(0) // 用于强制刷新
 	const [pathHistory, setPathHistory] = useState([]) // 路径历史，用于返回
@@ -247,53 +247,80 @@ export default function WebDavScreen() {
 	const [initialized, setInitialized] = useState(false) // 添加初始化状态标记
 	const [currentServer, setCurrentServer] = useState(null) // 显式保存当前服务器状态
 	const [isPlayerReady, setIsPlayerReady] = useState(false) // 跟踪播放器状态
+	const [hasRendered, setHasRendered] = useState(false) // 跟踪是否已渲染
 
 	// 组件挂载状态管理
 	useEffect(() => {
 		setIsMounted(true)
 		
-		// 初始化播放器
-		const initPlayer = async () => {
-			try {
-				// 检查TrackPlayer状态，但不阻塞界面渲染
-				const state = await TrackPlayer.getState()
-				if (isMounted) {
-					setIsPlayerReady(true)
-					logInfo('WebDAV页面: TrackPlayer已就绪', state)
-				}
-			} catch (playerError) {
-				logError('WebDAV页面: TrackPlayer初始化检查失败', playerError)
-				// 继续执行，不阻塞页面
-				if (isMounted) {
-					setIsPlayerReady(false)
-				}
+		// 使用requestAnimationFrame确保界面先渲染完成
+		requestAnimationFrame(() => {
+			if (isMounted) {
+				setHasRendered(true)
 			}
-		}
-		
-		// 异步初始化播放器，但不等待
-		initPlayer()
+		})
 		
 		return () => setIsMounted(false)
 	}, [])
 
-	// 安全获取当前服务器
+	// 延迟播放器初始化，让UI先渲染
 	useEffect(() => {
-		try {
-			const server = getCurrentWebDAVServer()
-			if (isMounted) {
-				setCurrentServer(server)
+		if (!hasRendered || !isMounted) return
+		
+		// 在UI渲染后延迟初始化播放器
+		const initPlayerTimer = setTimeout(() => {
+			// 异步初始化播放器，不阻塞UI
+			const initPlayer = async () => {
+				try {
+					// 检查TrackPlayer状态，但不阻塞界面渲染
+					const state = await TrackPlayer.getState()
+					if (isMounted) {
+						setIsPlayerReady(true)
+						logInfo('WebDAV页面: TrackPlayer已就绪', state)
+					}
+				} catch (playerError) {
+					logError('WebDAV页面: TrackPlayer初始化检查失败', playerError)
+					// 继续执行，不阻塞页面
+					if (isMounted) {
+						setIsPlayerReady(false)
+					}
+				}
 			}
-		} catch (error) {
-			logError('获取当前WebDAV服务器失败:', error)
-			if (isMounted) {
-				setError('获取WebDAV服务器信息失败')
+			
+			// 执行初始化但不等待结果
+			initPlayer().catch(error => {
+				logError('WebDAV页面: 播放器初始化失败', error)
+			})
+		}, 500) // 延迟500ms初始化播放器
+		
+		return () => clearTimeout(initPlayerTimer)
+	}, [hasRendered, isMounted])
+
+	// 安全获取当前服务器 - 同样使用延迟初始化
+	useEffect(() => {
+		if (!hasRendered || !isMounted) return
+		
+		// 延迟获取服务器信息，避免与渲染冲突
+		const serverInitTimer = setTimeout(() => {
+			try {
+				const server = getCurrentWebDAVServer()
+				if (isMounted) {
+					setCurrentServer(server)
+				}
+			} catch (error) {
+				logError('获取当前WebDAV服务器失败:', error)
+				if (isMounted) {
+					setError('获取WebDAV服务器信息失败')
+				}
+			} finally {
+				if (isMounted) {
+					setInitialized(true) // 标记初始化完成
+				}
 			}
-		} finally {
-			if (isMounted) {
-				setInitialized(true) // 标记初始化完成
-			}
-		}
-	}, [isMounted])
+		}, 300) // 延迟300ms获取服务器信息
+		
+		return () => clearTimeout(serverInitTimer)
+	}, [isMounted, hasRendered])
 
 	// 添加返回键处理
 	useEffect(() => {
@@ -310,7 +337,7 @@ export default function WebDavScreen() {
 
 	// 安全的文件加载函数 - 使用简单的超时处理
 	const safeLoadFiles = useCallback(async (path) => {
-		if (!isMounted) return // 如果组件已卸载，不执行操作
+		if (!isMounted || !hasRendered) return // 如果组件已卸载或未渲染，不执行操作
 		
 		setIsLoading(true)
 		setError(null)
@@ -374,7 +401,7 @@ export default function WebDavScreen() {
 				}
 			}
 		}
-	}, [isMounted])
+	}, [isMounted, hasRendered])
 
 	// 打开WebDAV设置
 	const openWebDAVSettings = useCallback(() => {
@@ -489,17 +516,22 @@ export default function WebDavScreen() {
 		)
 	}, [])
 
-	// 初次加载文件
+	// 初次加载文件 - 延迟加载，避免冲突
 	useEffect(() => {
-		if (initialized) {
-			loadFiles('/')
+		if (initialized && hasRendered) {
+			// 延迟加载文件，确保界面已渲染
+			const loadTimer = setTimeout(() => {
+				loadFiles('/')
+			}, 200) // 添加200ms延迟
+			
+			return () => clearTimeout(loadTimer)
 		}
-	}, [loadFiles, refreshKey, initialized])
+	}, [loadFiles, refreshKey, initialized, hasRendered])
 
 	// 准备渲染内容
 	const renderContent = useMemo(() => {
-		// 未初始化时显示加载界面
-		if (!initialized) {
+		// 始终返回一个有效的渲染内容，即使未初始化也显示加载界面
+		if (!hasRendered || !initialized) {
 			return <LoadingPlaceholder />
 		}
 
@@ -579,6 +611,7 @@ export default function WebDavScreen() {
 			</>
 		)
 	}, [
+		hasRendered,
 		initialized,
 		error,
 		isLoading,
@@ -593,33 +626,11 @@ export default function WebDavScreen() {
 		handleBack,
 	])
 
-	// 添加额外的错误处理
-	try {
-		return (
-			<ErrorCatcher onRetry={handleRefresh}>
-				<View style={{ flex: 1, backgroundColor: colors.background }}>{renderContent}</View>
-			</ErrorCatcher>
-		)
-	} catch (fatalError) {
-		logError('WebDAV页面渲染致命错误:', fatalError)
-		return (
-			<View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: colors.background }}>
-				<Feather name="alert-triangle" size={48} color="red" />
-				<Text style={{ marginTop: 16, color: colors.text, textAlign: 'center', fontSize: 16 }}>
-					WebDAV页面加载失败
-				</Text>
-				<TouchableOpacity
-					onPress={() => router.replace('/(tabs)/')}
-					style={{
-						marginTop: 16,
-						backgroundColor: colors.primary,
-						padding: 12,
-						borderRadius: 8,
-					}}
-				>
-					<Text style={{ color: '#fff' }}>返回主页</Text>
-				</TouchableOpacity>
-			</View>
-		)
-	}
+	// 直接返回包含渲染内容的视图，不使用try-catch
+	// 这确保即使内部组件出错，主视图仍然能够显示
+	return (
+		<ErrorCatcher onRetry={handleRefresh}>
+			<View style={{ flex: 1, backgroundColor: colors.background }}>{renderContent}</View>
+		</ErrorCatcher>
+	)
 }
