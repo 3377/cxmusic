@@ -3,12 +3,13 @@ import { logError, logInfo } from '@/helpers/logger'
 import {
 	getCurrentWebDAVServer,
 	getDirectoryContents,
+	verifyWebDAVConnection,
 	webdavFileToMusicItem,
 } from '@/helpers/webdavService'
 import { formatBytes } from '@/utils/formatter'
 import { Feather } from '@expo/vector-icons'
 import { useRouter } from 'expo-router'
-import React, { useCallback, useEffect, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import {
 	ActivityIndicator,
 	Alert,
@@ -247,59 +248,25 @@ export default function WebDavScreen() {
 	const [currentServer, setCurrentServer] = useState(null) // 显式保存当前服务器状态
 	const [isPlayerReady, setIsPlayerReady] = useState(false) // 跟踪播放器状态
 	const [hasRendered, setHasRendered] = useState(false) // 跟踪是否已渲染
-	const [loadAttempt, setLoadAttempt] = useState(0) // 跟踪加载尝试次数
-	const [emergencyMode, setEmergencyMode] = useState(false) // 紧急模式标志
-	const [isRecovering, setIsRecovering] = useState(false) // 恢复模式标志
 
-	// 组件挂载状态管理 - 最先调用的useEffect
+	// 组件挂载状态管理
 	useEffect(() => {
 		setIsMounted(true)
-
-		// 使用双重保护确保UI渲染
+		
+		// 使用requestAnimationFrame确保界面先渲染完成
 		requestAnimationFrame(() => {
 			if (isMounted) {
 				setHasRendered(true)
-				// 启动恢复计时器
-				setTimeout(() => {
-					if (isMounted && !initialized) {
-						// 5秒后如果仍未初始化，强制进入恢复模式
-						logInfo('WebDAV页面: 启动恢复模式')
-						setIsRecovering(true)
-					}
-				}, 5000)
 			}
 		})
-
-		return () => {
-			setIsMounted(false)
-		}
+		
+		return () => setIsMounted(false)
 	}, [])
-
-	// 恢复模式 - 在常规初始化失败时使用
-	useEffect(() => {
-		if (!isRecovering || !isMounted) return
-
-		logInfo('WebDAV页面: 恢复模式激活')
-
-		// 设置紧急模式状态
-		setEmergencyMode(true)
-		setInitialized(true) // 强制标记为已初始化
-		setIsLoading(false) // 确保不处于加载状态
-
-		// 尝试获取服务器状态
-		try {
-			const server = getCurrentWebDAVServer()
-			setCurrentServer(server)
-		} catch (error) {
-			logError('WebDAV恢复模式: 获取服务器失败', error)
-			// 在紧急模式下继续，不抛出错误
-		}
-	}, [isRecovering, isMounted])
 
 	// 延迟播放器初始化，让UI先渲染
 	useEffect(() => {
 		if (!hasRendered || !isMounted) return
-
+		
 		// 在UI渲染后延迟初始化播放器
 		const initPlayerTimer = setTimeout(() => {
 			// 异步初始化播放器，不阻塞UI
@@ -319,47 +286,41 @@ export default function WebDavScreen() {
 					}
 				}
 			}
-
-			// 在try-catch块中执行初始化
-			try {
-				initPlayer().catch((error) => {
-					logError('WebDAV页面: 播放器初始化失败', error)
-				})
-			} catch (error) {
-				logError('WebDAV页面: 播放器初始化错误', error)
-			}
-		}, 800) // 延迟800ms初始化播放器
-
+			
+			// 执行初始化但不等待结果
+			initPlayer().catch(error => {
+				logError('WebDAV页面: 播放器初始化失败', error)
+			})
+		}, 500) // 延迟500ms初始化播放器
+		
 		return () => clearTimeout(initPlayerTimer)
 	}, [hasRendered, isMounted])
 
 	// 安全获取当前服务器 - 同样使用延迟初始化
 	useEffect(() => {
-		if (!hasRendered || !isMounted || isRecovering) return
-
+		if (!hasRendered || !isMounted) return
+		
 		// 延迟获取服务器信息，避免与渲染冲突
 		const serverInitTimer = setTimeout(() => {
 			try {
 				const server = getCurrentWebDAVServer()
 				if (isMounted) {
 					setCurrentServer(server)
-					logInfo('WebDAV页面: 获取服务器成功', server?.name || '无服务器')
 				}
 			} catch (error) {
 				logError('获取当前WebDAV服务器失败:', error)
 				if (isMounted) {
-					setError('获取WebDAV服务器信息失败: ' + (error.message || '未知错误'))
+					setError('获取WebDAV服务器信息失败')
 				}
 			} finally {
 				if (isMounted) {
 					setInitialized(true) // 标记初始化完成
-					// 无论成功失败都设置为已初始化
 				}
 			}
-		}, 500) // 延迟500ms获取服务器信息
-
+		}, 300) // 延迟300ms获取服务器信息
+		
 		return () => clearTimeout(serverInitTimer)
-	}, [isMounted, hasRendered, isRecovering])
+	}, [isMounted, hasRendered])
 
 	// 添加返回键处理
 	useEffect(() => {
@@ -375,71 +336,116 @@ export default function WebDavScreen() {
 	}, [pathHistory])
 
 	// 安全的文件加载函数 - 使用简单的超时处理
-	const safeLoadFiles = useCallback(
-		async (path) => {
-			if (!isMounted || !hasRendered) return // 如果组件已卸载或未渲染，不执行操作
+	const safeLoadFiles = useCallback(async (path) => {
+		if (!isMounted || !hasRendered) return // 如果组件已卸载或未渲染，不执行操作
+		
+		setIsLoading(true)
+		setError(null)
 
-			setIsLoading(true)
-			setError(null)
+		let timeoutId = null
+		let loadPromiseResolved = false
 
-			// 记录当前加载尝试
-			const currentAttempt = loadAttempt
-			setLoadAttempt((prev) => prev + 1)
-
-			logInfo(`WebDAV页面: 开始加载文件 (尝试 ${currentAttempt + 1})，路径: ${path}`)
-
-			try {
-				// 使用更安全的方式获取文件列表
-				const filesData = await getDirectoryContents(path, { onlyMusic: false })
-
-				if (isMounted) {
-					const sortedFiles = [...filesData].sort((a, b) => {
-						// 文件夹优先
-						if (a.type === 'directory' && b.type !== 'directory') return -1
-						if (a.type !== 'directory' && b.type === 'directory') return 1
-
-						// 按文件名排序
-						return a.basename.localeCompare(b.basename)
-					})
-
-					setFiles(sortedFiles)
-					setIsLoading(false)
-					setError(null)
-					logInfo(`WebDAV页面: 文件加载成功，获取到 ${sortedFiles.length} 个文件`)
+		const timeoutPromise = new Promise((_, reject) => {
+			timeoutId = setTimeout(() => {
+				if (!loadPromiseResolved && isMounted) {
+					reject(new Error('获取文件列表超时，请检查网络连接'))
 				}
-			} catch (err) {
-				logError('WebDAV页面: 获取文件列表失败:', err)
+			}, 10000) // 10秒超时
+		})
 
-				if (isMounted) {
-					// 避免客户端完全崩溃
-					setIsLoading(false)
+		try {
+			// 使用Promise.race来处理超时
+			const filesData = await Promise.race([
+				getDirectoryContents(path, { onlyMusic: false }),
+				timeoutPromise,
+			])
 
-					// 设置用户友好的错误消息
-					const friendlyMessage = err.message
-						? `WebDAV访问错误: ${err.message}`
-						: '无法访问WebDAV文件，请检查网络连接或服务器配置'
+			loadPromiseResolved = true
+			clearTimeout(timeoutId)
 
-					setError(friendlyMessage)
+			if (isMounted) {
+				const sortedFiles = [...filesData].sort((a, b) => {
+					// 文件夹优先
+					if (a.type === 'directory' && b.type !== 'directory') return -1
+					if (a.type !== 'directory' && b.type === 'directory') return 1
 
-					// 如果连续失败3次，进入紧急模式
-					if (currentAttempt >= 2) {
-						logInfo('WebDAV页面: 多次加载失败，进入紧急模式')
-						setEmergencyMode(true)
+					// 按文件名排序
+					return a.basename.localeCompare(b.basename)
+				})
+
+				setFiles(sortedFiles)
+				setIsLoading(false)
+			}
+		} catch (err) {
+			loadPromiseResolved = true
+			clearTimeout(timeoutId)
+
+			if (isMounted) {
+				logError('获取WebDAV文件列表失败:', err)
+				setError(err.message || '获取文件列表失败')
+				setIsLoading(false)
+
+				// 连接问题时尝试验证WebDAV连接
+				try {
+					const server = getCurrentWebDAVServer()
+					if (server) {
+						const isConnected = await verifyWebDAVConnection(server)
+						if (!isConnected && isMounted) {
+							setError('无法连接到WebDAV服务器，请检查网络连接或服务器配置')
+						}
+					}
+				} catch (verifyError) {
+					if (isMounted) {
+						logError('验证WebDAV连接失败:', verifyError)
 					}
 				}
 			}
-		},
-		[isMounted, hasRendered, loadAttempt],
-	)
+		}
+	}, [isMounted, hasRendered])
+
+	// 打开WebDAV设置
+	const openWebDAVSettings = useCallback(() => {
+		try {
+			logInfo('打开WebDAV设置')
+			// 添加安全检查，防止快速多次点击
+			if (isLoading) return
+			setIsLoading(true)
+
+			// 添加小延迟，防止快速重复点击
+			setTimeout(() => {
+				router.push('/webdavModal')
+				// 延迟重置操作状态
+				setTimeout(() => {
+					setIsLoading(false)
+				}, 1000)
+			}, 100)
+		} catch (error) {
+			logError('导航到WebDAV设置失败:', error)
+			Alert.alert('错误', '无法打开WebDAV设置')
+			setIsLoading(false)
+		}
+	}, [router, isLoading])
+
+	// 处理返回上一级目录
+	const handleBack = useCallback(() => {
+		if (pathHistory.length === 0) return
+
+		try {
+			const prevPath = pathHistory[pathHistory.length - 1]
+			setCurrentPath(prevPath)
+			setPathHistory((prev) => prev.slice(0, -1))
+			safeLoadFiles(prevPath)
+		} catch (error) {
+			logError('返回上一级目录失败:', error)
+			setError('无法返回上一级目录')
+		}
+	}, [pathHistory])
 
 	// 加载当前目录的文件
 	const loadFiles = useCallback(
 		(path = '/') => {
 			// 保证多次快速调用不会重复执行
-			if (isLoading) {
-				logInfo('WebDAV页面: 忽略重复加载请求（已有加载进行中）')
-				return
-			}
+			if (isLoading) return
 			safeLoadFiles(path)
 		},
 		[safeLoadFiles, isLoading],
@@ -447,7 +453,6 @@ export default function WebDavScreen() {
 
 	// 处理刷新
 	const handleRefresh = useCallback(() => {
-		setEmergencyMode(false) // 退出紧急模式
 		loadFiles(currentPath)
 	}, [loadFiles, currentPath])
 
@@ -458,9 +463,8 @@ export default function WebDavScreen() {
 				// 保存当前路径到历史记录
 				setPathHistory((prev) => [...prev, currentPath])
 				// 设置新路径并加载文件
-				const newPath = file.path
-				setCurrentPath(newPath)
-				loadFiles(newPath)
+				setCurrentPath(file.path)
+				loadFiles(file.path)
 			} else if (/\.(mp3|flac|wav|ogg|m4a|aac)$/i.test(file.basename)) {
 				try {
 					// 处理音频文件
@@ -503,122 +507,39 @@ export default function WebDavScreen() {
 		[currentPath, loadFiles, isPlayerReady],
 	)
 
-	// 处理返回上一级目录
-	const handleBack = useCallback(() => {
-		if (pathHistory.length === 0) return
-
-		try {
-			const prevPath = pathHistory[pathHistory.length - 1]
-			setCurrentPath(prevPath)
-			setPathHistory((prev) => prev.slice(0, -1))
-			safeLoadFiles(prevPath)
-		} catch (error) {
-			logError('返回上一级目录失败:', error)
-			setError('无法返回上一级目录，请重试')
-		}
-	}, [pathHistory, safeLoadFiles])
-
-	// 打开WebDAV设置
-	const openWebDAVSettings = useCallback(() => {
-		try {
-			logInfo('打开WebDAV设置')
-			// 添加安全检查，防止快速多次点击
-			if (isLoading) return
-
-			// 不设置加载状态，避免UI冻结
-
-			// 添加小延迟，防止快速重复点击
-			setTimeout(() => {
-				try {
-					router.push('/webdavModal')
-				} catch (routeError) {
-					logError('WebDAV页面: 导航到设置页面失败', routeError)
-					Alert.alert('错误', '无法打开WebDAV设置，请稍后再试')
-				}
-			}, 200)
-		} catch (error) {
-			logError('导航到WebDAV设置失败:', error)
-			Alert.alert('错误', '无法打开WebDAV设置，请稍后再试')
-		}
-	}, [router, isLoading])
+	// 处理文件长按
+	const handleFileLongPress = useCallback((file) => {
+		// 长按操作，如显示详情或更多选项
+		Alert.alert(
+			'文件详情',
+			`名称: ${file.basename}\n大小: ${formatBytes(file.size || 0)}\n路径: ${file.path}`,
+		)
+	}, [])
 
 	// 初次加载文件 - 延迟加载，避免冲突
 	useEffect(() => {
-		if (initialized && hasRendered && !emergencyMode && !isRecovering) {
+		if (initialized && hasRendered) {
 			// 延迟加载文件，确保界面已渲染
 			const loadTimer = setTimeout(() => {
-				try {
-					loadFiles('/')
-				} catch (loadError) {
-					logError('WebDAV页面: 初始加载文件失败', loadError)
-					// 即使加载失败，也不影响UI渲染
-				}
-			}, 400) // 添加400ms延迟
-
+				loadFiles('/')
+			}, 200) // 添加200ms延迟
+			
 			return () => clearTimeout(loadTimer)
 		}
-	}, [loadFiles, refreshKey, initialized, hasRendered, emergencyMode, isRecovering])
+	}, [loadFiles, refreshKey, initialized, hasRendered])
 
-	// 渲染紧急模式内容
-	const renderEmergencyContent = () => (
-		<View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', padding: 20 }}>
-			<Feather name="alert-circle" size={48} color={colors.warning} />
-			<Text style={{ marginTop: 16, color: colors.text, textAlign: 'center', fontSize: 16 }}>
-				WebDAV服务暂时不可用
-			</Text>
-			<Text
-				style={{
-					marginTop: 8,
-					color: colors.textMuted,
-					textAlign: 'center',
-					paddingHorizontal: 20,
-				}}
-			>
-				{error || '无法访问WebDAV服务，请稍后再试'}
-			</Text>
-			<View style={{ flexDirection: 'row', marginTop: 20 }}>
-				<TouchableOpacity
-					onPress={handleRefresh}
-					style={{
-						backgroundColor: colors.primary,
-						padding: 12,
-						borderRadius: 8,
-						marginRight: 10,
-					}}
-				>
-					<Text style={{ color: '#fff' }}>重试</Text>
-				</TouchableOpacity>
-				<TouchableOpacity
-					onPress={openWebDAVSettings}
-					style={{
-						backgroundColor: colors.card,
-						padding: 12,
-						borderRadius: 8,
-						marginLeft: 10,
-					}}
-				>
-					<Text style={{ color: colors.text }}>设置</Text>
-				</TouchableOpacity>
-			</View>
-			<TouchableOpacity
-				onPress={() => router.replace('/(tabs)/')}
-				style={{
-					marginTop: 12,
-					padding: 10,
-				}}
-			>
-				<Text style={{ color: colors.textMuted }}>返回主页</Text>
-			</TouchableOpacity>
-		</View>
-	)
+	// 准备渲染内容
+	const renderContent = useMemo(() => {
+		// 始终返回一个有效的渲染内容，即使未初始化也显示加载界面
+		if (!hasRendered || !initialized) {
+			return <LoadingPlaceholder />
+		}
 
-	// 渲染主内容
-	const renderMainContent = () => {
 		// 显示错误情况
 		if (error) {
 			return (
 				<View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', padding: 20 }}>
-					<Feather name="alert-triangle" size={48} color="orange" />
+					<Feather name="alert-triangle" size={48} color="red" />
 					<Text style={{ marginTop: 16, color: colors.text, textAlign: 'center', fontSize: 16 }}>
 						{error}
 					</Text>
@@ -686,34 +607,30 @@ export default function WebDavScreen() {
 					renderItem={({ item }) => (
 						<FileItem file={item} onPress={handleFilePress} onLongPress={handleFileLongPress} />
 					)}
-					// 添加刷新控制
-					refreshing={isLoading}
-					onRefresh={handleRefresh}
-					// 避免在加载时阻塞UI
-					initialNumToRender={10}
-					maxToRenderPerBatch={10}
-					windowSize={10}
-					removeClippedSubviews={true}
 				/>
 			</>
 		)
-	}
+	}, [
+		hasRendered,
+		initialized,
+		error,
+		isLoading,
+		currentServer,
+		files,
+		handleRefresh,
+		openWebDAVSettings,
+		handleFilePress,
+		handleFileLongPress,
+		pathHistory,
+		currentPath,
+		handleBack,
+	])
 
-	// 直接返回包含渲染内容的视图 - 根据状态选择不同的渲染模式
+	// 直接返回包含渲染内容的视图，不使用try-catch
+	// 这确保即使内部组件出错，主视图仍然能够显示
 	return (
 		<ErrorCatcher onRetry={handleRefresh}>
-			<View style={{ flex: 1, backgroundColor: colors.background }}>
-				{!hasRendered ? (
-					// 1. 等待首次渲染
-					<LoadingPlaceholder />
-				) : emergencyMode ? (
-					// 2. 紧急模式 - 当多次加载失败时
-					renderEmergencyContent()
-				) : (
-					// 3. 正常渲染模式
-					renderMainContent()
-				)}
-			</View>
+			<View style={{ flex: 1, backgroundColor: colors.background }}>{renderContent}</View>
 		</ErrorCatcher>
 	)
 }
