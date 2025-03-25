@@ -1,0 +1,28 @@
+diff --git a/node_modules/react-native-reanimated/ios/REAModule.mm b/node_modules/react-native-reanimated/ios/REAModule.mm
+index d01c0af..31d7cf3 100644
+--- a/node_modules/react-native-reanimated/ios/REAModule.mm
++++ b/node_modules/react-native-reanimated/ios/REAModule.mm
+@@ -8,7 +8,12 @@
+ #import "REAModule.h"
+ 
+ #import <React/RCTBridge+Private.h>
++
++// Fix import issues for iOS build
++#ifndef RCT_NEW_ARCH_ENABLED
+ #import <React/RCTUIManager.h>
++#endif
++
+ #import <React/RCTUIManagerUtils.h>
+ #import <React/RCTUIManagerObserverCoordinator.h>
+ 
+@@ -59,6 +64,10 @@ - (void)invalidate
+ - (void)installReanimatedAfterReload
+ {
+   static dispatch_once_t reanimatedInstallationToken;
++  
++  #ifdef RCT_NEW_ARCH_ENABLED
++  return; // Skip for new architecture to avoid build errors
++  #endif
+ 
+   // Although the documentation for dispatch_once says that it guarantees the block
+   // is executed only once for the lifetime of the application, the documentation 

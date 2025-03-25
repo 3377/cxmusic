@@ -100,4 +100,4 @@ jobs:
           name: CyMusic
           path: ios/CyMusic.ipa
           compression-level: 0 # 禁用压缩
-          content-type: application/octet-stream # 明确指定内容类型为二进制流
+          mime-types: application/octet-stream # 明确指定内容类型为二进制流

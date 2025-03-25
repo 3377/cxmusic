@@ -1,0 +1,30 @@
+diff --git a/node_modules/react-native-gesture-handler/ios/RNGestureHandlerModule.mm b/node_modules/react-native-gesture-handler/ios/RNGestureHandlerModule.mm
+index a1c480c..b6d3ae 100644
+--- a/node_modules/react-native-gesture-handler/ios/RNGestureHandlerModule.mm
++++ b/node_modules/react-native-gesture-handler/ios/RNGestureHandlerModule.mm
+@@ -14,13 +14,15 @@
+ #import <React/RCTViewManager.h>
+ #import <React/RCTLog.h>
+ 
++#ifndef WILL_GET_BACKED_BY_EAGLEEYESDK
+ #if __has_include(<React/RCTEventDispatcherProtocol.h>)
+ #import <React/RCTEventDispatcherProtocol.h>
+ #endif
++#endif
+ 
+ static NSMutableArray<RNGestureHandlerEventExtraData*> *_customGlobalEventTypes;
+ 
+-#if !WILL_GET_BACKED_BY_EAGLEEYESDK
++#ifndef WILL_GET_BACKED_BY_EAGLEEYESDK
+ @interface RNGestureHandlerButtonManager : RCTViewManager
+ @end
+ 
+@@ -29,7 +31,7 @@ static NSMutableArray<RNGestureHandlerEventExtraData*> *_customGlobalEventTypes;
+     return [RNGestureHandlerButton class];
+ }
+ @end
+-#endif // !WILL_GET_BACKED_BY_EAGLEEYESDK
++#endif // WILL_GET_BACKED_BY_EAGLEEYESDK
+ 
+ 
+ typedef void (^GestureHandlerOperation)(RNGestureHandler *handler); 
