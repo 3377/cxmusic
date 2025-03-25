@@ -131,6 +131,13 @@ export default function WebDAVStandalone() {
 			<Stack.Screen
 				options={{
 					title: 'WebDAV服务',
+					headerStyle: {
+						backgroundColor: colors.background,
+					},
+					headerTitleStyle: {
+						color: colors.text,
+					},
+					headerTintColor: colors.primary,
 					headerLeft: () => (
 						<TouchableOpacity onPress={() => router.replace('/(tabs)/')} style={{ padding: 8 }}>
 							<Feather name="arrow-left" size={24} color={colors.primary} />

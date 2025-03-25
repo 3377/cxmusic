@@ -3,18 +3,20 @@ import { logError, logInfo } from '@/helpers/logger'
 import { getCurrentWebDAVServer, getDirectoryContents, WebDAVFile } from '@/helpers/webdavService'
 import { formatBytes } from '@/utils/formatter'
 import { Feather } from '@expo/vector-icons'
-import { Link, Stack, useRouter } from 'expo-router'
+import { Stack, useRouter } from 'expo-router'
 import React, { useEffect, useRef, useState } from 'react'
 import {
 	ActivityIndicator,
 	Alert,
 	BackHandler,
 	FlatList,
+	SafeAreaView,
 	StyleSheet,
 	Text,
 	TouchableOpacity,
 	View,
 } from 'react-native'
+import TrackPlayer from 'react-native-track-player'
 
 // 格式化日期工具函数
 const formatDate = (dateString: string) => {
@@ -28,27 +30,181 @@ const formatDate = (dateString: string) => {
 }
 
 // 文件项组件
-const FileItem = ({ file, onPress }) => {
+const FileItem = ({ file, onPress, onLongPress }) => {
 	const isDirectory = file.type === 'directory'
+	const isAudioFile = file.type === 'file' && file.basename.match(/\.(mp3|m4a|wav|flac|aac)$/i)
 
 	return (
-		<TouchableOpacity onPress={() => onPress(file)} style={styles.fileItem}>
-			<View style={styles.fileRow}>
+		<TouchableOpacity
+			onPress={() => onPress(file)}
+			onLongPress={() => onLongPress(file)}
+			style={{
+				paddingVertical: 12,
+				paddingHorizontal: 16,
+				borderBottomWidth: 1,
+				borderBottomColor: '#333',
+			}}
+		>
+			<View style={{ flexDirection: 'row', alignItems: 'center' }}>
 				<Feather
-					name={isDirectory ? 'folder' : 'file'}
+					name={isDirectory ? 'folder' : isAudioFile ? 'music' : 'file'}
 					size={24}
-					color={isDirectory ? colors.primary : colors.text}
-					style={styles.fileIcon}
+					color={isDirectory ? colors.primary : isAudioFile ? colors.secondary : colors.text}
+					style={{ marginRight: 12 }}
 				/>
-				<View style={styles.fileInfo}>
-					<Text style={styles.fileName}>{file.basename}</Text>
-					<Text style={styles.fileDetails}>
+				<View style={{ flex: 1 }}>
+					<Text style={{ color: colors.text, fontSize: 16 }}>{file.basename}</Text>
+					<Text style={{ color: colors.textMuted, fontSize: 12 }}>
 						{isDirectory ? '文件夹' : formatBytes(file.size || 0)} • {formatDate(file.lastmod)}
 					</Text>
 				</View>
 			</View>
 		</TouchableOpacity>
 	)
+}
+
+// 加载中占位符组件
+function LoadingPlaceholder() {
+	return (
+		<View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', padding: 20 }}>
+			<ActivityIndicator size="large" color={colors.primary} />
+			<Text style={{ marginTop: 16, color: colors.text }}>正在加载文件...</Text>
+		</View>
+	)
+}
+
+// 空内容组件
+function EmptyContent({ onRefresh }) {
+	return (
+		<View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', padding: 20 }}>
+			<Feather name="inbox" size={48} color={colors.textMuted} />
+			<Text style={{ marginTop: 16, color: colors.text, fontSize: 16 }}>文件夹为空</Text>
+			<TouchableOpacity
+				onPress={onRefresh}
+				style={{
+					marginTop: 16,
+					backgroundColor: colors.primary,
+					padding: 12,
+					borderRadius: 8,
+				}}
+			>
+				<Text style={{ color: '#fff' }}>刷新</Text>
+			</TouchableOpacity>
+		</View>
+	)
+}
+
+// 错误捕获组件
+class ErrorCatcher extends React.Component {
+	state = { hasError: false, error: null }
+
+	static getDerivedStateFromError(error) {
+		return { hasError: true, error }
+	}
+
+	componentDidCatch(error, errorInfo) {
+		logError('WebDAV页面渲染错误:', error, errorInfo)
+	}
+
+	retry = () => {
+		this.setState({ hasError: false, error: null })
+		if (this.props.onRetry) {
+			this.props.onRetry()
+		}
+	}
+
+	render() {
+		if (this.state.hasError) {
+			return (
+				<View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', padding: 20 }}>
+					<Feather name="alert-triangle" size={48} color="red" />
+					<Text style={{ marginTop: 16, color: colors.text, textAlign: 'center', fontSize: 16 }}>
+						WebDAV页面加载失败
+					</Text>
+					<Text style={{ marginTop: 8, color: colors.textMuted, textAlign: 'center' }}>
+						{this.state.error?.message || '未知错误'}
+					</Text>
+					<TouchableOpacity
+						onPress={this.retry}
+						style={{
+							marginTop: 16,
+							backgroundColor: colors.primary,
+							padding: 12,
+							borderRadius: 8,
+						}}
+					>
+						<Text style={{ color: '#fff' }}>重试</Text>
+					</TouchableOpacity>
+				</View>
+			)
+		}
+
+		return this.props.children
+	}
+}
+
+// 播放WebDAV音乐的简化函数
+const playWebDavTrack = async (musicItem) => {
+	try {
+		if (!musicItem) {
+			throw new Error('无效的音乐项')
+		}
+
+		logInfo('准备播放WebDAV音乐:', musicItem.title)
+
+		// 检查TrackPlayer是否准备就绪
+		try {
+			// 直接使用Track Player API播放音乐
+			await TrackPlayer.reset()
+			await TrackPlayer.add({
+				id: musicItem.id || `webdav-${Date.now()}`,
+				url: musicItem.url,
+				title: musicItem.title || '未知标题',
+				artist: musicItem.artist || '未知艺术家',
+				artwork: musicItem.artwork || '',
+			})
+			await TrackPlayer.play()
+
+			logInfo('正在播放WebDAV音乐:', musicItem.title)
+		} catch (playerError) {
+			logError('TrackPlayer操作失败:', playerError)
+			Alert.alert('播放错误', '音乐播放器初始化失败，请稍后重试')
+		}
+	} catch (error) {
+		logError('播放WebDAV音乐失败:', error)
+		Alert.alert('错误', '无法播放此音乐文件')
+	}
+}
+
+// 将WebDAV文件添加到播放列表的简化函数
+const addToPlaylist = async (musicItem) => {
+	try {
+		if (!musicItem) {
+			throw new Error('无效的音乐项')
+		}
+
+		logInfo('准备添加到播放列表:', musicItem.title)
+
+		// 将音乐添加到播放队列
+		try {
+			await TrackPlayer.add({
+				id: musicItem.id || `webdav-${Date.now()}`,
+				url: musicItem.url,
+				title: musicItem.title || '未知标题',
+				artist: musicItem.artist || '未知艺术家',
+				artwork: musicItem.artwork || '',
+			})
+
+			logInfo('已添加到播放列表:', musicItem.title)
+			Alert.alert('提示', '已添加到播放列表')
+		} catch (playerError) {
+			logError('TrackPlayer添加失败:', playerError)
+			Alert.alert('错误', '音乐播放器初始化失败，请稍后重试')
+		}
+	} catch (error) {
+		logError('添加到播放列表失败:', error)
+		Alert.alert('错误', '无法添加到播放列表')
+	}
 }
 
 // 安全的WebDAV浏览器组件
@@ -215,7 +371,7 @@ export default function WebDAVBrowser() {
 	}
 
 	// 处理文件/目录点击
-	const handleFilePress = (file) => {
+	const handleFilePress = async (file) => {
 		if (file.type === 'directory') {
 			// 保存当前路径到历史
 			setPathHistory([...pathHistory, currentPath])
@@ -223,13 +379,44 @@ export default function WebDAVBrowser() {
 			setCurrentPath(file.path)
 			// 加载新目录
 			loadFiles(file.path)
-		} else {
-			// 处理文件点击
-			Alert.alert(
-				'文件信息',
-				`文件名: ${file.basename}\n大小: ${formatBytes(file.size || 0)}\n类型: ${file.mime || '未知'}\n修改时间: ${formatDate(file.lastmod)}`,
-				[{ text: '确定', style: 'cancel' }],
-			)
+		} else if (file.type === 'file' && file.basename.match(/\.(mp3|m4a|wav|flac|aac)$/i)) {
+			// 处理音频文件
+			const musicItem = {
+				id: `webdav-${Date.now()}`,
+				url: file.filename,
+				title: file.basename,
+				artist: 'WebDAV音乐',
+				artwork: '',
+			}
+
+			Alert.alert('选择操作', '请选择要执行的操作', [
+				{
+					text: '播放',
+					onPress: () => playWebDavTrack(musicItem),
+				},
+				{
+					text: '添加到播放列表',
+					onPress: () => addToPlaylist(musicItem),
+				},
+				{
+					text: '取消',
+					style: 'cancel',
+				},
+			])
+		}
+	}
+
+	// 处理文件长按
+	const handleFileLongPress = (file) => {
+		if (file.type === 'file' && file.basename.match(/\.(mp3|m4a|wav|flac|aac)$/i)) {
+			const musicItem = {
+				id: `webdav-${Date.now()}`,
+				url: file.filename,
+				title: file.basename,
+				artist: 'WebDAV音乐',
+				artwork: '',
+			}
+			addToPlaylist(musicItem)
 		}
 	}
 
@@ -276,6 +463,53 @@ export default function WebDAVBrowser() {
 		}
 	}
 
+	// 渲染内容
+	const renderContent = () => {
+		if (isLoading) {
+			return <LoadingPlaceholder />
+		}
+
+		if (error) {
+			return (
+				<View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', padding: 20 }}>
+					<Feather name="alert-circle" size={48} color="red" />
+					<Text style={{ marginTop: 16, color: colors.text, textAlign: 'center', fontSize: 16 }}>
+						加载失败
+					</Text>
+					<Text style={{ marginTop: 8, color: colors.textMuted, textAlign: 'center' }}>
+						{error}
+					</Text>
+					<TouchableOpacity
+						onPress={() => loadFiles(currentPath)}
+						style={{
+							marginTop: 16,
+							backgroundColor: colors.primary,
+							padding: 12,
+							borderRadius: 8,
+						}}
+					>
+						<Text style={{ color: '#fff' }}>重试</Text>
+					</TouchableOpacity>
+				</View>
+			)
+		}
+
+		if (files.length === 0) {
+			return <EmptyContent onRefresh={() => loadFiles(currentPath)} />
+		}
+
+		return (
+			<FlatList
+				data={files}
+				keyExtractor={(item) => item.filename}
+				renderItem={({ item }) => (
+					<FileItem file={item} onPress={handleFilePress} onLongPress={handleFileLongPress} />
+				)}
+				contentContainerStyle={{ paddingBottom: 20 }}
+			/>
+		)
+	}
+
 	return (
 		<>
 			<Stack.Screen
@@ -305,128 +539,26 @@ export default function WebDAVBrowser() {
 				}}
 			/>
 
-			<View style={styles.container}>
-				{/* 当前路径显示 */}
-				<View style={styles.pathBar}>
-					<Text style={styles.pathText} numberOfLines={1} ellipsizeMode="middle">
-						{currentPath === '/' ? '根目录' : currentPath}
-					</Text>
+			<SafeAreaView style={{ flex: 1, backgroundColor: colors.background }}>
+				<ErrorCatcher onRetry={() => loadFiles(currentPath)}>
+					<View style={styles.container}>
+						{/* 当前路径显示 */}
+						<View style={styles.pathBar}>
+							<Text style={styles.pathText} numberOfLines={1} ellipsizeMode="middle">
+								{currentPath === '/' ? '根目录' : currentPath}
+							</Text>
 
-					{pathHistory.length > 0 && (
-						<TouchableOpacity onPress={handleBack} style={styles.backButton}>
-							<Feather name="chevron-up" size={20} color={colors.text} />
-						</TouchableOpacity>
-					)}
-				</View>
-
-				{/* 错误状态 */}
-				{error ? (
-					<View style={styles.centerContainer}>
-						<Feather name="alert-triangle" size={48} color="red" />
-						<Text style={styles.errorText}>{error}</Text>
-						<TouchableOpacity onPress={handleRefresh} style={styles.button}>
-							<Text style={styles.buttonText}>重试</Text>
-						</TouchableOpacity>
-
-						<TouchableOpacity
-							onPress={handleReset}
-							style={[
-								styles.button,
-								{ marginTop: 10, backgroundColor: colors.secondary || '#555' },
-							]}
-						>
-							<Text style={styles.buttonText}>重置</Text>
-						</TouchableOpacity>
-
-						<Link href="/webdavModal" asChild>
-							<TouchableOpacity style={[styles.button, { marginTop: 10 }]}>
-								<Text style={styles.buttonText}>WebDAV设置</Text>
-							</TouchableOpacity>
-						</Link>
-
-						<TouchableOpacity
-							onPress={() => router.back()}
-							style={[
-								styles.button,
-								{
-									marginTop: 10,
-									backgroundColor: 'transparent',
-									borderWidth: 1,
-									borderColor: colors.border || '#333',
-								},
-							]}
-						>
-							<Text style={{ color: colors.text }}>返回选择</Text>
-						</TouchableOpacity>
-					</View>
-				) : isLoading ? (
-					// 加载状态
-					<View style={styles.centerContainer}>
-						<ActivityIndicator size="large" color={colors.primary} />
-						<Text style={styles.loadingText}>加载中...</Text>
-						<TouchableOpacity
-							onPress={() => {
-								cleanup()
-								setIsLoading(false)
-								setError('用户取消了加载')
-							}}
-							style={[
-								styles.button,
-								{
-									marginTop: 12,
-									backgroundColor: 'transparent',
-									borderWidth: 1,
-									borderColor: colors.border || '#333',
-								},
-							]}
-						>
-							<Text style={{ color: colors.text }}>取消</Text>
-						</TouchableOpacity>
-					</View>
-				) : files.length === 0 ? (
-					// 空目录状态
-					<View style={styles.centerContainer}>
-						<Feather name="folder" size={48} color={colors.textMuted} />
-						<Text style={styles.emptyText}>文件夹为空</Text>
-						<View style={{ flexDirection: 'row', marginTop: 16 }}>
-							<TouchableOpacity
-								onPress={handleRefresh}
-								style={[styles.button, { marginRight: 10 }]}
-							>
-								<Text style={styles.buttonText}>刷新</Text>
-							</TouchableOpacity>
 							{pathHistory.length > 0 && (
-								<TouchableOpacity
-									onPress={handleBack}
-									style={[styles.button, { backgroundColor: colors.secondary || '#555' }]}
-								>
-									<Text style={styles.buttonText}>返回上级</Text>
+								<TouchableOpacity onPress={handleBack} style={styles.backButton}>
+									<Feather name="chevron-up" size={20} color={colors.text} />
 								</TouchableOpacity>
 							)}
 						</View>
+
+						{renderContent()}
 					</View>
-				) : (
-					// 文件列表
-					<FlatList
-						data={files}
-						renderItem={({ item }) => <FileItem file={item} onPress={handleFilePress} />}
-						keyExtractor={(item) =>
-							item.path + (item.etag || item.lastmod || Math.random().toString())
-						}
-						contentContainerStyle={styles.listContent}
-						initialNumToRender={10}
-						maxToRenderPerBatch={10}
-						windowSize={5}
-						onRefresh={handleRefresh}
-						refreshing={isLoading}
-						ListEmptyComponent={() => (
-							<View style={styles.centerContainer}>
-								<Text style={styles.emptyText}>没有文件</Text>
-							</View>
-						)}
-					/>
-				)}
-			</View>
+				</ErrorCatcher>
+			</SafeAreaView>
 		</>
 	)
 }
