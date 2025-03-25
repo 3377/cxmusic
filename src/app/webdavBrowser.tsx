@@ -160,8 +160,9 @@ const cacheWebDAVFile = async (file: WebDAVFile) => {
 		// 检查是否已缓存
 		const cacheInfo = await FileSystem.getInfoAsync(cacheFilePath)
 		if (cacheInfo.exists) {
-			logInfo('使用缓存的音乐文件:', file.basename)
-			return { localPath: cacheFilePath, isLocal: true }
+			logInfo('使用缓存的音乐文件:', cacheFilePath)
+			// 确保加上file://前缀
+			return { localPath: `file://${cacheFilePath}`, isLocal: true }
 		}
 
 		// 获取WebDAV文件URL
@@ -188,13 +189,22 @@ const cacheWebDAVFile = async (file: WebDAVFile) => {
 		// 尝试使用方案1: 直接下载
 		try {
 			logInfo('尝试方案1 - 直接下载文件:', file.basename)
-			await FileSystem.downloadAsync(fileUrl, cacheFilePath, {
+			const downloadResult = await FileSystem.downloadAsync(fileUrl, cacheFilePath, {
 				headers: {
 					Authorization: `Basic ${btoa(`${server.username}:${server.password}`)}`,
 				},
 			})
-			logInfo('方案1成功 - 音乐文件已缓存:', cacheFilePath)
-			return { localPath: cacheFilePath, isLocal: true }
+
+			// 检查下载结果
+			logInfo('下载结果状态码:', downloadResult.status)
+
+			// 验证文件是否真的存在
+			const fileExists = await FileSystem.getInfoAsync(cacheFilePath)
+			if (!fileExists.exists) throw new Error('文件下载完成但未找到文件')
+
+			logInfo('方案1成功 - 音乐文件已缓存:', cacheFilePath, '文件大小:', fileExists.size)
+			// 确保加上file://前缀
+			return { localPath: `file://${cacheFilePath}`, isLocal: true }
 		} catch (downloadError) {
 			logError('方案1失败 - 直接下载WebDAV文件失败:', downloadError)
 
@@ -206,14 +216,25 @@ const cacheWebDAVFile = async (file: WebDAVFile) => {
 
 				// 获取文件内容
 				const fileContent = await client.getFileContents(file.filename, { format: 'binary' })
+				if (!fileContent) throw new Error('获取到的文件内容为空')
+
+				logInfo(
+					'获取到WebDAV文件内容，长度:',
+					typeof fileContent === 'string' ? fileContent.length : '[二进制数据]',
+				)
 
 				// 将内容写入本地文件
 				await FileSystem.writeAsStringAsync(cacheFilePath, fileContent, {
 					encoding: FileSystem.EncodingType.Base64,
 				})
 
-				logInfo('方案2成功 - 音乐文件已缓存:', cacheFilePath)
-				return { localPath: cacheFilePath, isLocal: true }
+				// 验证文件是否存在
+				const fileExists = await FileSystem.getInfoAsync(cacheFilePath)
+				if (!fileExists.exists) throw new Error('文件写入完成但未找到文件')
+
+				logInfo('方案2成功 - 音乐文件已缓存:', cacheFilePath, '文件大小:', fileExists.size)
+				// 确保加上file://前缀
+				return { localPath: `file://${cacheFilePath}`, isLocal: true }
 			} catch (clientError) {
 				logError('方案2失败 - WebDAV客户端获取文件失败:', clientError)
 
@@ -264,6 +285,7 @@ const playWebDavTrack = async (file: WebDAVFile) => {
 
 		// 缓存文件
 		const { localPath, isLocal } = await cacheWebDAVFile(file)
+		logInfo('音乐文件路径:', localPath, '是否本地文件:', isLocal)
 
 		// 提取文件名称(不含扩展名)
 		const fileTitle = file.basename.replace(/\.[^/.]+$/, '')
@@ -295,33 +317,56 @@ const playWebDavTrack = async (file: WebDAVFile) => {
 
 		logInfo('准备播放音乐项:', JSON.stringify(musicItem))
 
-		// 播放音乐
+		// 播放音乐 - 尝试方案1: 使用TrackPlayer直接播放
 		try {
+			logInfo('尝试方案1 - 使用TrackPlayer直接播放')
+
+			// 确保播放器已设置
+			const setupPlayer = require('@/hooks/useSetupTrackPlayer').setupPlayer
+			await setupPlayer().catch((e) => logInfo('播放器已初始化，忽略错误:', e))
+
 			// 重置播放器
 			await TrackPlayer.reset()
 
 			// 添加到播放队列
-			await TrackPlayer.add(musicItem)
+			await TrackPlayer.add({
+				...musicItem,
+				// 确保添加必要属性
+				type: file.basename.endsWith('.flac') ? 'default' : 'default',
+			})
 
 			// 开始播放
 			await TrackPlayer.play()
 
-			logInfo('正在播放WebDAV音乐:', file.basename)
+			logInfo('方案1成功 - 正在播放WebDAV音乐:', file.basename)
 		} catch (playerError) {
-			logError('TrackPlayer操作失败:', playerError)
+			logError('方案1失败 - TrackPlayer操作失败:', playerError)
 
-			// 尝试备选方案 - 使用原始播放方式
+			// 尝试方案2 - 使用原始播放方式
 			try {
-				logInfo('尝试备选播放方案')
+				logInfo('尝试方案2 - 使用myTrackPlayer播放')
 
-				// 使用myTrackPlayer的play函数
+				// 导入并使用myTrackPlayer的play函数
 				const myTrackPlayer = require('@/helpers/trackPlayerIndex')
 				await myTrackPlayer.play(musicItem, true)
 
-				logInfo('备选播放方案成功')
+				logInfo('方案2成功 - 使用myTrackPlayer播放成功')
 			} catch (altPlayerError) {
-				logError('备选播放方案失败:', altPlayerError)
-				Alert.alert('播放错误', '无法播放此音乐文件，请尝试其他文件或检查文件格式')
+				logError('方案2失败 - 原生播放方式失败:', altPlayerError)
+
+				// 尝试方案3 - 使用最原始的播放方式
+				try {
+					logInfo('尝试方案3 - 使用最原始的播放方式')
+
+					const setTrackSource = require('@/helpers/trackPlayerIndex').setTrackSource
+					await TrackPlayer.reset()
+					await setTrackSource(musicItem, true)
+
+					logInfo('方案3成功 - 使用setTrackSource播放成功')
+				} catch (finalError) {
+					logError('方案3失败 - 所有播放方式都失败:', finalError)
+					throw new Error('尝试了所有播放方式但都失败')
+				}
 			}
 		}
 	} catch (error) {
@@ -342,6 +387,7 @@ const addToPlaylist = async (file: WebDAVFile, playlist: IMusic.PlayList) => {
 
 		// 缓存文件
 		const { localPath, isLocal } = await cacheWebDAVFile(file)
+		logInfo('音乐文件路径:', localPath, '是否本地文件:', isLocal)
 
 		// 提取文件名称(不含扩展名)
 		const fileTitle = file.basename.replace(/\.[^/.]+$/, '')
@@ -386,7 +432,7 @@ const addToPlaylist = async (file: WebDAVFile, playlist: IMusic.PlayList) => {
 		playListsStore.setValue(updatedPlayLists)
 		PersistStatus.set('music.playLists', updatedPlayLists)
 
-		logInfo('已添加到播放列表:', file.basename)
+		logInfo('已添加到播放列表:', file.basename, '播放列表名称:', playlist.name)
 		Alert.alert('提示', `已将 "${title}" 添加到播放列表 "${playlist.name}"`)
 	} catch (error) {
 		logError('添加到播放列表失败:', error)
