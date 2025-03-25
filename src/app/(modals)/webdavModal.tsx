@@ -29,15 +29,27 @@ import {
 } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 
-// 尝试导入手势组件，但不强制要求，使用条件渲染
+// 尝试导入手势组件，封装在try/catch中避免错误
 let GestureHandler = null
 let Animated = null
 try {
-	const RNGestureHandler = require('react-native-gesture-handler')
-	GestureHandler = RNGestureHandler.PanGestureHandler
+	// 基本导入
+	GestureHandler = require('react-native-gesture-handler').PanGestureHandler
 	Animated = require('react-native-reanimated')
+
+	// 检查API兼容性
+	if (
+		!Animated.useSharedValue ||
+		!Animated.useAnimatedGestureHandler ||
+		!Animated.useAnimatedStyle
+	) {
+		throw new Error('缺少必要的Reanimated API')
+	}
+
+	logInfo('手势库加载成功')
 } catch (error) {
 	logError('手势库加载失败，将使用备用关闭模式', error)
+	// 保持为null，用备用方案
 }
 
 // 错误边界组件
@@ -497,8 +509,8 @@ const validateServerConfig = (server) => {
 
 // 主页面组件
 const WebDAVModal = () => {
-	const insets = useSafeAreaInsets()
 	const router = useRouter()
+	const insets = useSafeAreaInsets()
 	const [servers, setServers] = useState<WebDAVServer[]>([])
 	const [isLoading, setIsLoading] = useState(true)
 	const [modalVisible, setModalVisible] = useState(false)
@@ -508,21 +520,15 @@ const WebDAVModal = () => {
 	const [loadError, setLoadError] = useState<string | null>(null)
 	const [error, setError] = useState<string | null>(null)
 	const [startY, setStartY] = useState(0)
+	const [currentY, setCurrentY] = useState(0)
+	const [isDragging, setIsDragging] = useState(false)
+	const [animatedValues, setAnimatedValues] = useState(null)
 
 	// 组件挂载状态管理
 	useEffect(() => {
 		setIsComponentMounted(true)
 		return () => setIsComponentMounted(false)
 	}, [])
-
-	// 添加返回键处理
-	useEffect(() => {
-		const backHandler = BackHandler.addEventListener('hardwareBackPress', () => {
-			handleGoBack()
-			return true
-		})
-		return () => backHandler.remove()
-	}, [modalVisible])
 
 	// 加载服务器列表
 	const loadServers = useCallback(async () => {
@@ -717,71 +723,123 @@ const WebDAVModal = () => {
 		}
 	}, [modalVisible, router])
 
-	// 处理触摸开始
+	// 使用useEffect安全地创建动画值
+	useEffect(() => {
+		let values = null
+		try {
+			if (Animated && Animated.useSharedValue) {
+				const translationY = Animated.useSharedValue(0)
+				values = { translationY }
+				logInfo('动画值创建成功')
+			}
+		} catch (error) {
+			logError('创建动画值失败:', error)
+		}
+		setAnimatedValues(values)
+	}, [])
+
+	// 监听返回键
+	useEffect(() => {
+		const backHandler = BackHandler.addEventListener('hardwareBackPress', () => {
+			if (modalVisible) {
+				handleCloseModal(false)
+				return true
+			}
+			router.back()
+			return true
+		})
+
+		return () => backHandler.remove()
+	}, [handleCloseModal, router, modalVisible])
+
+	// 备用触摸事件处理 - 如果手势库不可用
 	const handleTouchStart = (event) => {
 		setStartY(event.nativeEvent.pageY)
+		setCurrentY(event.nativeEvent.pageY)
+		setIsDragging(true)
 	}
 
-	// 处理触摸移动
 	const handleTouchMove = (event) => {
-		const currentY = event.nativeEvent.pageY
-		const distance = currentY - startY
-
-		// 如果下滑超过100像素，关闭模态窗口
-		if (distance > 100) {
-			handleGoBack()
+		if (isDragging) {
+			setCurrentY(event.nativeEvent.pageY)
 		}
 	}
 
-	// 渲染容器，根据是否有手势库使用不同实现
-	const renderContainer = (children) => {
-		if (GestureHandler && Animated) {
-			// 使用第三方手势库实现
-			try {
-				const animatedStyles = {
-					transform: [{ translateY: 0 }],
-				}
+	const handleTouchEnd = () => {
+		if (isDragging) {
+			const diff = currentY - startY
+			if (diff > 50) {
+				// 向下滑动超过阈值，关闭模态窗口
+				router.back()
+			}
+			setIsDragging(false)
+		}
+	}
 
+	// 条件渲染容器 - 基于是否有手势库
+	const renderContainer = (children) => {
+		try {
+			// 如果手势库和动画值都可用
+			if (GestureHandler && Animated && animatedValues && animatedValues.translationY) {
+				// 创建手势处理器
+				const gestureHandler = Animated.useAnimatedGestureHandler({
+					onStart: (_event, ctx) => {
+						ctx.startY = animatedValues.translationY.value
+					},
+					onActive: (event, ctx) => {
+						if (event.translationY > 0) {
+							// 只允许向下拖动
+							animatedValues.translationY.value = ctx.startY + event.translationY
+						}
+					},
+					onEnd: (event) => {
+						if (event.translationY > 100) {
+							// 关闭模态窗口
+							router.back()
+						} else {
+							// 回弹到起始位置
+							Animated.withSpring(animatedValues.translationY, {
+								toValue: 0,
+								damping: 20,
+								stiffness: 200,
+							})
+						}
+					},
+				})
+
+				// 创建动画样式
+				const animatedStyle = Animated.useAnimatedStyle(() => {
+					return {
+						transform: [{ translateY: animatedValues.translationY.value }],
+					}
+				})
+
+				// 使用手势处理器和动画
 				return (
-					<View style={{ flex: 1 }}>
-						<GestureHandler
-							onGestureEvent={(event) => {
-								if (event.nativeEvent.translationY > 100) {
-									handleGoBack()
-								}
-							}}
-						>
-							<Animated.View style={[styles.container, { paddingTop: insets.top }, animatedStyles]}>
-								{children}
-							</Animated.View>
-						</GestureHandler>
-					</View>
-				)
-			} catch (error) {
-				logError('手势处理渲染失败，使用备用方式', error)
-				// 发生错误时使用备用方式
-				return (
-					<View
-						style={[styles.container, { paddingTop: insets.top }]}
-						onTouchStart={handleTouchStart}
-						onTouchMove={handleTouchMove}
-					>
-						{children}
-					</View>
+					<GestureHandler onGestureEvent={gestureHandler}>
+						<Animated.View style={[styles.container, animatedStyle]}>
+							<View style={styles.handle} />
+							{children}
+						</Animated.View>
+					</GestureHandler>
 				)
 			}
-		} else {
-			// 使用基本触摸处理作为备用
-			return (
-				<View
-					style={[styles.container, { paddingTop: insets.top }]}
-					onTouchStart={handleTouchStart}
-					onTouchMove={handleTouchMove}
-				>
-					{children}
-				</View>
-			)
+		} catch (error) {
+			logError('渲染手势容器失败，使用备用方案:', error)
 		}
+
+		// 备用方案 - 使用基础触摸事件
+		return (
+			<View
+				style={styles.container}
+				onTouchStart={handleTouchStart}
+				onTouchMove={handleTouchMove}
+				onTouchEnd={handleTouchEnd}
+			>
+				<View style={styles.handle} />
+				{children}
+			</View>
+		)
 	}
 
 	// 如果没有服务器，显示添加服务器的引导信息
@@ -1142,6 +1200,12 @@ const styles = StyleSheet.create({
 	},
 	buttonDisabled: {
 		backgroundColor: '#ccc',
+	},
+	handle: {
+		height: 5,
+		backgroundColor: colors.border,
+		borderRadius: 2.5,
+		marginBottom: 10,
 	},
 })
 

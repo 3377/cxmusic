@@ -143,97 +143,94 @@ function LoadingView() {
 export default function WebDavLayout() {
 	const router = useRouter()
 	const [isLoading, setIsLoading] = useState(true)
-	const [isInitialized, setIsInitialized] = useState(false)
 	const [initError, setInitError] = useState(null)
 	const [retryCount, setRetryCount] = useState(0)
-	const [isInitializing, setIsInitializing] = useState(false)
+	const [isMounted, setIsMounted] = useState(true)
 	const currentServer = useCurrentWebDAVServer()
 
-	// 安全的初始化WebDAV服务
-	const safeInitWebDAV = async () => {
-		// 如果正在初始化，防止重复调用
-		if (isInitializing) return
+	// 简化的WebDAV初始化
+	useEffect(() => {
+		// 防止组件卸载后的状态更新
+		setIsMounted(true)
 
-		try {
-			setIsInitializing(true)
-			logInfo(`WebDAV布局: 开始初始化WebDAV服务 (尝试 ${retryCount + 1})`)
-			setIsLoading(true)
-			setInitError(null)
+		// 如果组件还挂载着，执行初始化
+		if (isMounted) {
+			// 初始化函数
+			const initWebDAV = async () => {
+				try {
+					logInfo(`WebDAV布局: 开始初始化WebDAV服务 (尝试 ${retryCount + 1})`)
+					setIsLoading(true)
+					setInitError(null)
 
-			// 设置超时保护
-			let initPromiseResolved = false
+					// 设置超时保护
+					let initTimeout = setTimeout(() => {
+						if (isMounted) {
+							setInitError('初始化WebDAV服务超时，请检查网络连接')
+							setIsLoading(false)
+						}
+					}, 10000)
 
-			const initPromise = setupWebDAV().then((result) => {
-				initPromiseResolved = true
-				return result
+					// 初始化WebDAV
+					await setupWebDAV()
+
+					// 清除超时
+					clearTimeout(initTimeout)
+
+					// 如果组件仍然挂载，更新状态
+					if (isMounted) {
+						setIsLoading(false)
+						logInfo('WebDAV布局: WebDAV服务初始化完成')
+					}
+				} catch (error) {
+					logError('WebDAV布局: 初始化WebDAV服务失败', error)
+
+					// 如果组件仍然挂载，更新错误状态
+					if (isMounted) {
+						setInitError(error.message || '初始化WebDAV服务失败')
+						setIsLoading(false)
+
+						// 自动重试（最多3次）
+						if (retryCount < 3) {
+							setTimeout(() => {
+								if (isMounted) setRetryCount((prev) => prev + 1)
+							}, 2000)
+						}
+					}
+				}
+			}
+
+			// 执行初始化
+			initWebDAV()
+
+			// 订阅WebDAV状态变更
+			const unsubscribe = subscribeToWebDAVStatus(() => {
+				logInfo('WebDAV布局: WebDAV状态已更新')
 			})
 
-			// 使用setTimeout替代Promise.race，避免复杂的Promise处理
-			const timeoutId = setTimeout(() => {
-				if (!initPromiseResolved) {
-					setInitError('初始化WebDAV服务超时')
-					setIsInitialized(true)
-					setIsLoading(false)
-					setIsInitializing(false)
-				}
-			}, 10000)
-
-			// 等待WebDAV服务初始化
-			await initPromise
-			clearTimeout(timeoutId)
-
-			// 短暂延迟以确保UI状态更新
-			setTimeout(() => {
-				setIsInitialized(true)
-				setIsLoading(false)
-				setIsInitializing(false)
-				logInfo('WebDAV布局: WebDAV服务初始化完成')
-			}, 500)
-		} catch (error) {
-			logError('WebDAV布局: 初始化WebDAV服务失败', error)
-			setInitError(error.message || '初始化WebDAV服务失败')
-			setIsInitialized(true)
-			setIsLoading(false)
-			setIsInitializing(false)
-
-			// 自动重试（最多3次）
-			if (retryCount < 3) {
-				setTimeout(() => {
-					setRetryCount((prev) => prev + 1)
-				}, 1000)
+			// 清理函数
+			return () => {
+				setIsMounted(false)
+				unsubscribe()
 			}
 		}
-	}
-
-	// 初始化WebDAV服务
-	useEffect(() => {
-		// 使用安全的初始化函数
-		safeInitWebDAV()
-
-		// 订阅WebDAV状态变更
-		const unsubscribe = subscribeToWebDAVStatus(() => {
-			logInfo('WebDAV布局: WebDAV状态已更新')
-		})
-
-		return () => {
-			unsubscribe()
-		}
-	}, [retryCount])
+	}, [retryCount, isMounted])
 
 	// 处理设置按钮点击
 	const handleSettingsPress = () => {
 		try {
+			if (isLoading) return // 防止加载中点击
+
 			logInfo('WebDAV布局: 打开WebDAV设置')
 			router.push('/webdavModal')
 		} catch (error) {
-			logError('WebDAV布局: WebDAV设置导航错误', error)
-			Alert.alert('错误', '无法打开WebDAV设置')
+			logError('WebDAV布局: 导航到WebDAV设置失败', error)
+			Alert.alert('错误', '无法打开WebDAV设置，请重试')
 		}
 	}
 
 	// 处理重试初始化
 	const handleRetry = () => {
-		logInfo('WebDAV布局: 重试初始化WebDAV服务')
+		logInfo('WebDAV布局: 手动重试初始化WebDAV服务')
 		setRetryCount((prev) => prev + 1)
 	}
 
@@ -250,63 +247,92 @@ export default function WebDavLayout() {
 				}}
 			>
 				<Feather name="alert-triangle" size={48} color="red" />
-				<Text
-					style={{
-						marginTop: 16,
-						fontSize: 18,
-						fontWeight: 'bold',
-						color: colors.text,
-						textAlign: 'center',
-					}}
-				>
+				<Text style={{ marginTop: 16, color: colors.text, fontSize: 16, textAlign: 'center' }}>
 					WebDAV服务初始化失败
 				</Text>
-				<Text
-					style={{
-						marginTop: 8,
-						color: colors.textMuted,
-						textAlign: 'center',
-						marginBottom: 20,
-					}}
-				>
+				<Text style={{ marginTop: 8, color: colors.textMuted, textAlign: 'center' }}>
 					{initError}
 				</Text>
 				<TouchableOpacity
 					onPress={handleRetry}
 					style={{
+						marginTop: 16,
 						backgroundColor: colors.primary,
 						padding: 12,
 						borderRadius: 8,
-						marginBottom: 12,
 					}}
 				>
-					<Text style={{ color: '#fff', fontWeight: 'bold' }}>重试</Text>
+					<Text style={{ color: '#fff' }}>重试</Text>
 				</TouchableOpacity>
 				<TouchableOpacity
-					onPress={() => router.back()}
+					onPress={() => router.replace('/(tabs)/')}
 					style={{
+						marginTop: 12,
 						padding: 12,
 						borderRadius: 8,
 					}}
 				>
-					<Text style={{ color: colors.text }}>返回</Text>
+					<Text style={{ color: colors.text }}>返回主页</Text>
 				</TouchableOpacity>
 			</View>
 		)
 	}
 
-	// 在加载中时显示加载状态
+	// 如果正在加载，显示加载状态
 	if (isLoading) {
 		return <LoadingView />
 	}
 
-	// 返回布局组件
+	// 如果未配置WebDAV服务器，显示提示消息
+	if (!currentServer) {
+		return (
+			<View
+				style={{
+					flex: 1,
+					justifyContent: 'center',
+					alignItems: 'center',
+					backgroundColor: colors.background,
+					padding: 20,
+				}}
+			>
+				<Feather name="server" size={48} color={colors.textMuted} />
+				<Text style={{ marginTop: 16, color: colors.text, fontSize: 16, textAlign: 'center' }}>
+					未配置WebDAV服务器
+				</Text>
+				<Text style={{ marginTop: 8, color: colors.textMuted, textAlign: 'center' }}>
+					请添加WebDAV服务器以访问您的文件
+				</Text>
+				<TouchableOpacity
+					onPress={handleSettingsPress}
+					style={{
+						marginTop: 16,
+						backgroundColor: colors.primary,
+						padding: 12,
+						borderRadius: 8,
+					}}
+				>
+					<Text style={{ color: '#fff' }}>配置WebDAV</Text>
+				</TouchableOpacity>
+			</View>
+		)
+	}
+
+	// 正常渲染WebDAV页面
 	return (
 		<ErrorBoundary>
 			<Stack
 				screenOptions={{
-					headerShown: false,
-					contentStyle: { backgroundColor: colors.background },
+					headerStyle: {
+						backgroundColor: colors.background,
+					},
+					headerTintColor: colors.text,
+					headerRight: () => <SafeHeaderButton onPress={handleSettingsPress} />,
+					headerTitleStyle: {
+						color: colors.text,
+					},
+					contentStyle: {
+						backgroundColor: colors.background,
+					},
 				}}
 			/>
 		</ErrorBoundary>

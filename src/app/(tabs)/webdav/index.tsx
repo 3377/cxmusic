@@ -1,6 +1,10 @@
 import { colors } from '@/constants/tokens'
 import { logError, logInfo } from '@/helpers/logger'
-import { useCurrentWebDAVServer, webdavFileToMusicItem } from '@/helpers/webdavService'
+import {
+	getCurrentWebDAVServer,
+	getDirectoryContents,
+	verifyWebDAVConnection,
+} from '@/helpers/webdavService'
 import { formatBytes } from '@/utils/formatter'
 import { Feather } from '@expo/vector-icons'
 import { useRouter } from 'expo-router'
@@ -217,167 +221,138 @@ const addToPlaylist = async (musicItem) => {
 
 export default function WebDavScreen() {
 	const router = useRouter()
-	const currentServer = useCurrentWebDAVServer()
-
 	const [currentPath, setCurrentPath] = useState('/')
 	const [files, setFiles] = useState([])
 	const [isLoading, setIsLoading] = useState(true)
 	const [error, setError] = useState(null)
 	const [refreshKey, setRefreshKey] = useState(0) // 用于强制刷新
-	const [isLoadingOperation, setIsLoadingOperation] = useState(false) // 正在执行操作标志
-	const [history, setHistory] = useState([]) // 导航历史记录
+	const [pathHistory, setPathHistory] = useState([]) // 路径历史，用于返回
 
 	// 添加返回键处理
 	useEffect(() => {
 		const backHandler = BackHandler.addEventListener('hardwareBackPress', () => {
 			// 如果有历史记录，返回上一级目录
-			if (history.length > 0) {
+			if (pathHistory.length > 0) {
 				handleBack()
 				return true
 			}
 			return false
 		})
 		return () => backHandler.remove()
-	}, [history])
+	}, [pathHistory])
+
+	// 安全的文件加载函数 - 使用简单的超时处理
+	const safeLoadFiles = useCallback(async (path) => {
+		setIsLoading(true)
+		setError(null)
+
+		let timeoutId = null
+		let loadPromiseResolved = false
+
+		try {
+			// 设置超时保护
+			timeoutId = setTimeout(() => {
+				if (!loadPromiseResolved) {
+					throw new Error('加载文件超时，请检查网络连接')
+				}
+			}, 15000)
+
+			// 先检查当前服务器
+			const server = await getCurrentWebDAVServer()
+			if (!server) {
+				throw new Error('未配置WebDAV服务器')
+			}
+
+			// 验证WebDAV连接
+			const isConnected = await verifyWebDAVConnection(server)
+			if (!isConnected) {
+				throw new Error('无法连接到WebDAV服务器，请检查设置')
+			}
+
+			// 加载文件
+			const filesList = await getDirectoryContents(path)
+			loadPromiseResolved = true
+
+			// 对文件进行排序 - 目录在前，文件在后
+			const sortedFiles = [...filesList].sort((a, b) => {
+				// 先按类型排序（目录在前）
+				if (a.type !== b.type) {
+					return a.type === 'directory' ? -1 : 1
+				}
+				// 再按名称字母顺序排序
+				return a.basename.localeCompare(b.basename)
+			})
+
+			// 过滤出非隐藏文件（不以.开头）
+			const visibleFiles = sortedFiles.filter((file) => !file.basename.startsWith('.'))
+
+			setFiles(visibleFiles)
+			setIsLoading(false)
+		} catch (error) {
+			let errorMessage = '加载文件失败'
+
+			// 根据错误类型提供更具体的错误信息
+			if (error.status === 401) {
+				errorMessage = '授权失败: 请检查用户名和密码'
+			} else if (error.status === 404) {
+				errorMessage = '路径不存在: ' + path
+			} else if (error.message && error.message.includes('timeout')) {
+				errorMessage = '连接超时: 请检查网络和服务器设置'
+			} else if (error.message && error.message.includes('ENOTFOUND')) {
+				errorMessage = '找不到服务器: 请检查URL是否正确'
+			} else if (error.message && error.message.includes('ECONNREFUSED')) {
+				errorMessage = '连接被拒绝: 服务器可能未运行或拒绝连接'
+			} else if (error.message) {
+				errorMessage = error.message
+			}
+
+			setError(errorMessage)
+			setIsLoading(false)
+			logError('加载WebDAV文件失败:', error)
+		} finally {
+			if (timeoutId) {
+				clearTimeout(timeoutId)
+			}
+		}
+	}, [])
 
 	// 打开WebDAV设置
 	const openWebDAVSettings = useCallback(() => {
 		try {
 			logInfo('打开WebDAV设置')
 			// 添加安全检查，防止快速多次点击
-			if (isLoadingOperation) return
-			setIsLoadingOperation(true)
+			if (isLoading) return
+			setIsLoading(true)
 
 			// 添加小延迟，防止快速重复点击
 			setTimeout(() => {
 				router.push('/webdavModal')
 				// 延迟重置操作状态
 				setTimeout(() => {
-					setIsLoadingOperation(false)
+					setIsLoading(false)
 				}, 1000)
 			}, 100)
 		} catch (error) {
 			logError('导航到WebDAV设置失败:', error)
 			Alert.alert('错误', '无法打开WebDAV设置')
-			setIsLoadingOperation(false)
+			setIsLoading(false)
 		}
-	}, [router, isLoadingOperation])
+	}, [router, isLoading])
 
 	// 处理返回上一级目录
 	const handleBack = useCallback(() => {
-		if (history.length === 0) return
+		if (pathHistory.length === 0) return
 
 		try {
-			const prevPath = history[history.length - 1]
+			const prevPath = pathHistory[pathHistory.length - 1]
 			setCurrentPath(prevPath)
-			setHistory((prev) => prev.slice(0, -1))
-			loadFiles(prevPath)
+			setPathHistory((prev) => prev.slice(0, -1))
+			safeLoadFiles(prevPath)
 		} catch (error) {
 			logError('返回上一级目录失败:', error)
 			setError('无法返回上一级目录')
 		}
-	}, [history])
-
-	// 安全的加载文件函数
-	const safeLoadFiles = useCallback(
-		async (path = '/') => {
-			try {
-				setIsLoading(true)
-				setError(null)
-
-				// 检查是否有WebDAV服务器配置
-				if (!currentServer) {
-					setIsLoading(false)
-					return
-				}
-
-				logInfo('正在加载WebDAV文件列表，路径:', path)
-
-				// 获取当前服务器的客户端
-				const client = currentServer.client
-				if (!client) {
-					logError('WebDAV客户端未初始化，无法加载文件')
-					setError('未连接到WebDAV服务器，请检查服务器设置')
-					setIsLoading(false)
-					return
-				}
-
-				// 添加超时保护
-				let loadPromiseResolved = false
-
-				const loadPromise = client.getDirectoryContents(path).then((result) => {
-					loadPromiseResolved = true
-					return result
-				})
-
-				// 使用setTimeout替代Promise.race，避免复杂的Promise处理
-				const timeoutId = setTimeout(() => {
-					if (!loadPromiseResolved) {
-						throw new Error('加载文件列表超时')
-					}
-				}, 15000)
-
-				// 获取文件列表
-				const contents = await loadPromise
-				clearTimeout(timeoutId)
-
-				if (!contents || !Array.isArray(contents)) {
-					logError('WebDAV返回的文件列表格式不正确')
-					setError('读取文件列表失败，服务器返回格式错误')
-					setIsLoading(false)
-					return
-				}
-
-				// 过滤和处理文件
-				const filteredFiles = contents
-					.filter((item) => {
-						// 排除点文件和文件夹（如 .git, .DS_Store 等）
-						if (item.basename.startsWith('.')) {
-							return false
-						}
-						return (
-							item.type === 'directory' ||
-							(item.mime && item.mime.startsWith('audio/')) ||
-							/\.(mp3|flac|wav|ogg|m4a|aac)$/i.test(item.basename)
-						)
-					})
-					.map((item) => ({
-						...item,
-						path: path === '/' ? `/${item.basename}` : `${path}/${item.basename}`,
-					}))
-
-				// 排序：文件夹在前，文件在后
-				const sortedFiles = filteredFiles.sort((a, b) => {
-					if (a.type === 'directory' && b.type !== 'directory') return -1
-					if (a.type !== 'directory' && b.type === 'directory') return 1
-					return a.basename.localeCompare(b.basename)
-				})
-
-				setFiles(sortedFiles)
-				logInfo(`已加载 ${sortedFiles.length} 个文件，路径:`, path)
-			} catch (error) {
-				logError(`加载WebDAV文件列表失败 (${path}):`, error)
-				let errorMessage = '无法加载文件列表'
-				if (error.message) {
-					if (error.message.includes('timeout')) {
-						errorMessage = '加载超时，请检查网络连接和WebDAV服务器状态'
-					} else if (error.message.includes('401')) {
-						errorMessage = '认证失败，请检查用户名和密码'
-					} else if (error.message.includes('404')) {
-						errorMessage = '找不到路径，请检查WebDAV服务器设置'
-					} else if (error.message.includes('ECONNREFUSED')) {
-						errorMessage = '连接被拒绝，请检查服务器地址和端口'
-					} else {
-						errorMessage = `加载失败: ${error.message}`
-					}
-				}
-				setError(errorMessage)
-			} finally {
-				setIsLoading(false)
-			}
-		},
-		[currentServer],
-	)
+	}, [pathHistory])
 
 	// 加载当前目录的文件
 	const loadFiles = useCallback(
@@ -399,7 +374,7 @@ export default function WebDavScreen() {
 		(file) => {
 			if (file.type === 'directory') {
 				// 保存当前路径到历史记录
-				setHistory((prev) => [...prev, currentPath])
+				setPathHistory((prev) => [...prev, currentPath])
 				// 设置新路径并加载文件
 				setCurrentPath(file.path)
 				loadFiles(file.path)
@@ -501,7 +476,7 @@ export default function WebDavScreen() {
 						borderBottomColor: '#333',
 					}}
 				>
-					{history.length > 0 && (
+					{pathHistory.length > 0 && (
 						<TouchableOpacity onPress={handleBack} style={{ marginRight: 8 }}>
 							<Feather name="arrow-left" size={24} color={colors.text} />
 						</TouchableOpacity>
@@ -533,7 +508,7 @@ export default function WebDavScreen() {
 		openWebDAVSettings,
 		handleFilePress,
 		handleFileLongPress,
-		history,
+		pathHistory,
 		currentPath,
 		handleBack,
 	])
