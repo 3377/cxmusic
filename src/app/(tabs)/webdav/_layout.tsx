@@ -85,9 +85,16 @@ class ErrorBoundary extends React.Component {
 					</TouchableOpacity>
 					<TouchableOpacity
 						onPress={() => {
-							this.props.navigation?.goBack() ||
-								this.props.router?.back() ||
-								(typeof window !== 'undefined' && window.history && window.history.back())
+							try {
+								if (this.props.router) {
+									this.props.router.replace('/(tabs)/')
+								} else {
+									logInfo('WebDAV布局: 使用备用导航返回主页')
+									Redirect({ href: '/(tabs)/' })
+								}
+							} catch (navError) {
+								logError('WebDAV布局: 导航返回失败', navError)
+							}
 						}}
 						style={{
 							marginTop: 12,
@@ -96,7 +103,7 @@ class ErrorBoundary extends React.Component {
 							borderRadius: 8,
 						}}
 					>
-						<Text style={{ color: colors.text }}>返回上一页</Text>
+						<Text style={{ color: colors.text }}>返回主页</Text>
 					</TouchableOpacity>
 				</View>
 			)
@@ -225,12 +232,18 @@ export default function WebDavLayout() {
 			// 使用setTimeout避免过快导航可能引起的闪退
 			setTimeout(() => {
 				try {
-					router.push('/webdavModal')
+					// 确保应用了我们最新的修复后再调用router
+					if (router) {
+						router.push('/webdavModal')
+					} else {
+						logError('WebDAV布局: 导航器未初始化')
+						Alert.alert('错误', '无法打开WebDAV设置，请重试')
+					}
 				} catch (navError) {
 					logError('WebDAV布局: 导航到WebDAV设置失败', navError)
 					Alert.alert('错误', '无法打开WebDAV设置，请重试')
 				}
-			}, 100)
+			}, 250) // 增加延迟时间
 		} catch (error) {
 			logError('WebDAV布局: 导航到WebDAV设置失败', error)
 			Alert.alert('错误', '无法打开WebDAV设置，请重试')
@@ -327,26 +340,55 @@ export default function WebDavLayout() {
 	}
 
 	// 正常渲染WebDAV页面
-	return (
-		<ErrorBoundary router={router}>
-			<Stack
-				screenOptions={{
-					headerShown: true,
-					headerStyle: {
-						backgroundColor: colors.background,
-					},
-					headerTitleStyle: {
-						color: colors.text,
-					},
-					headerTintColor: colors.primary,
-					contentStyle: {
-						backgroundColor: colors.background,
-					},
-					headerRight: () => <SafeHeaderButton onPress={handleSettingsPress} />,
-				}}
-			>
-				<Stack.Screen name="index" options={{ title: 'WebDAV 云音乐' }} />
-			</Stack>
-		</ErrorBoundary>
-	)
+	try {
+		return (
+			<ErrorBoundary router={router}>
+				<Stack
+					screenOptions={{
+						headerShown: true,
+						headerStyle: {
+							backgroundColor: colors.background,
+						},
+						headerTitleStyle: {
+							color: colors.text,
+						},
+						headerTintColor: colors.primary,
+						contentStyle: {
+							backgroundColor: colors.background,
+						},
+						headerRight: () => <SafeHeaderButton onPress={handleSettingsPress} />,
+					}}
+				>
+					<Stack.Screen name="index" options={{ title: 'WebDAV 云音乐' }} />
+				</Stack>
+			</ErrorBoundary>
+		)
+	} catch (renderError) {
+		logError('WebDAV布局: 渲染失败', renderError)
+		return (
+			<View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: colors.background }}>
+				<Feather name="alert-triangle" size={48} color="red" />
+				<Text style={{ marginTop: 16, color: colors.text, textAlign: 'center', fontSize: 16 }}>
+					WebDAV页面加载失败
+				</Text>
+				<TouchableOpacity
+					onPress={() => {
+						try {
+							router.replace('/(tabs)/')
+						} catch (navError) {
+							logError('返回主页失败', navError)
+						}
+					}}
+					style={{
+						marginTop: 16,
+						backgroundColor: colors.primary,
+						padding: 12,
+						borderRadius: 8,
+					}}
+				>
+					<Text style={{ color: '#fff' }}>返回主页</Text>
+				</TouchableOpacity>
+			</View>
+		)
+	}
 }

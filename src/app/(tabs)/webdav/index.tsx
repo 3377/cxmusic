@@ -4,6 +4,7 @@ import {
 	getCurrentWebDAVServer,
 	getDirectoryContents,
 	verifyWebDAVConnection,
+	webdavFileToMusicItem,
 } from '@/helpers/webdavService'
 import { formatBytes } from '@/utils/formatter'
 import { Feather } from '@expo/vector-icons'
@@ -228,12 +229,33 @@ export default function WebDavScreen() {
 	const [refreshKey, setRefreshKey] = useState(0) // 用于强制刷新
 	const [pathHistory, setPathHistory] = useState([]) // 路径历史，用于返回
 	const [isMounted, setIsMounted] = useState(true)
+	const [initialized, setInitialized] = useState(false) // 添加初始化状态标记
+	const [currentServer, setCurrentServer] = useState(null) // 显式保存当前服务器状态
 
 	// 组件挂载状态管理
 	useEffect(() => {
 		setIsMounted(true)
 		return () => setIsMounted(false)
 	}, [])
+
+	// 安全获取当前服务器
+	useEffect(() => {
+		try {
+			const server = getCurrentWebDAVServer()
+			if (isMounted) {
+				setCurrentServer(server)
+			}
+		} catch (error) {
+			logError('获取当前WebDAV服务器失败:', error)
+			if (isMounted) {
+				setError('获取WebDAV服务器信息失败')
+			}
+		} finally {
+			if (isMounted) {
+				setInitialized(true) // 标记初始化完成
+			}
+		}
+	}, [isMounted])
 
 	// 添加返回键处理
 	useEffect(() => {
@@ -419,11 +441,18 @@ export default function WebDavScreen() {
 
 	// 初次加载文件
 	useEffect(() => {
-		loadFiles('/')
-	}, [loadFiles, refreshKey])
+		if (initialized) {
+			loadFiles('/')
+		}
+	}, [loadFiles, refreshKey, initialized])
 
 	// 准备渲染内容
 	const renderContent = useMemo(() => {
+		// 未初始化时显示加载界面
+		if (!initialized) {
+			return <LoadingPlaceholder />
+		}
+
 		// 显示错误情况
 		if (error) {
 			return (
@@ -500,6 +529,7 @@ export default function WebDavScreen() {
 			</>
 		)
 	}, [
+		initialized,
 		error,
 		isLoading,
 		currentServer,
@@ -513,9 +543,33 @@ export default function WebDavScreen() {
 		handleBack,
 	])
 
-	return (
-		<ErrorCatcher onRetry={handleRefresh}>
-			<View style={{ flex: 1, backgroundColor: colors.background }}>{renderContent}</View>
-		</ErrorCatcher>
-	)
+	// 添加额外的错误处理
+	try {
+		return (
+			<ErrorCatcher onRetry={handleRefresh}>
+				<View style={{ flex: 1, backgroundColor: colors.background }}>{renderContent}</View>
+			</ErrorCatcher>
+		)
+	} catch (fatalError) {
+		logError('WebDAV页面渲染致命错误:', fatalError)
+		return (
+			<View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: colors.background }}>
+				<Feather name="alert-triangle" size={48} color="red" />
+				<Text style={{ marginTop: 16, color: colors.text, textAlign: 'center', fontSize: 16 }}>
+					WebDAV页面加载失败
+				</Text>
+				<TouchableOpacity
+					onPress={() => router.replace('/(tabs)/')}
+					style={{
+						marginTop: 16,
+						backgroundColor: colors.primary,
+						padding: 12,
+						borderRadius: 8,
+					}}
+				>
+					<Text style={{ color: '#fff' }}>返回主页</Text>
+				</TouchableOpacity>
+			</View>
+		)
+	}
 }
