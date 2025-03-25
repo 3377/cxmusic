@@ -84,13 +84,20 @@ jobs:
             mkdir -p Payload/CyMusic.app/PlugIns
             cp -r build/Build/Products/Release-iphoneos/ShareExtension.appex Payload/CyMusic.app/PlugIns/
           fi
-          zip -r CyMusic.ipa Payload
+          
+          # 生成按指定格式命名的IPA文件（应用名-时间.ipa）
+          # 生成北京时间（UTC+8）
+          BEIJING_TIME=$(TZ=Asia/Shanghai date '+%Y%m%d-%H%M')
+          IPA_FILENAME="CyMusic-${BEIJING_TIME}.ipa"
+          echo "IPA_FILENAME=${IPA_FILENAME}" >> $GITHUB_ENV
+          
+          zip -r "$IPA_FILENAME" Payload
 
           # 确保IPA文件被识别为iOS应用类型
           echo "设置IPA MIME类型"
-          if [ -f "CyMusic.ipa" ]; then
+          if [ -f "$IPA_FILENAME" ]; then
             # 添加特殊标记确保GitHub识别为IPA文件
-            echo "application/octet-stream" > CyMusic.ipa.mime
+            echo "application/octet-stream" > "${IPA_FILENAME}.mime"
           fi
           cd ..
 
@@ -98,5 +105,17 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: CyMusic
-          path: ios/CyMusic.ipa
+          path: ios/${{ env.IPA_FILENAME }}
           compression-level: 0 # 禁用压缩
+
+      # 添加发送到Telegram的步骤
+      - name: Send IPA to Telegram
+        uses: appleboy/telegram-action@master
+        with:
+          to: ${{ secrets.TELEGRAM_TO }}
+          token: ${{ secrets.TELEGRAM_TOKEN }}
+          message: "新的构建已完成! 构建时间: ${{ env.IPA_FILENAME }}"
+          document: ios/${{ env.IPA_FILENAME }}
+        env:
+          TELEGRAM_TO: ${{ secrets.TELEGRAM_TO }}
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
