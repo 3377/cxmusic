@@ -1,5 +1,4 @@
 import { colors } from '@/constants/tokens'
-import { hideLoading, setLoadingError, showLoading, useLoading } from '@/helpers/loading'
 import { logError, logInfo } from '@/helpers/logger'
 import {
 	WebDAVServer,
@@ -18,6 +17,7 @@ import React, { useCallback, useEffect, useState } from 'react'
 import {
 	ActivityIndicator,
 	Alert,
+	BackHandler,
 	FlatList,
 	Modal,
 	StyleSheet,
@@ -131,6 +131,8 @@ const ServerEditModal = ({ isVisible, onClose, initialServer = null, loadServers
 	const [username, setUsername] = useState('')
 	const [password, setPassword] = useState('')
 	const [isDefault, setIsDefault] = useState(false)
+	const [isLoading, setIsLoading] = useState(false)
+	const [isTesting, setIsTesting] = useState(false)
 	const router = useRouter()
 
 	// 当模态窗口显示时，初始化表单数据
@@ -176,7 +178,7 @@ const ServerEditModal = ({ isVisible, onClose, initialServer = null, loadServers
 		}
 
 		try {
-			showLoading('正在保存服务器配置...', { type: 'webdav' })
+			setIsLoading(true)
 
 			// 清理URL，先移除可能已有的协议前缀
 			let cleanUrl = url.trim()
@@ -185,7 +187,7 @@ const ServerEditModal = ({ isVisible, onClose, initialServer = null, loadServers
 			// 如果清理后为空
 			if (!cleanUrl) {
 				Alert.alert('错误', '请输入有效的服务器地址')
-				hideLoading('webdav')
+				setIsLoading(false)
 				return
 			}
 
@@ -196,163 +198,255 @@ const ServerEditModal = ({ isVisible, onClose, initialServer = null, loadServers
 			try {
 				new URL(fullUrl)
 			} catch (e) {
-				Alert.alert('错误', '请输入有效的服务器地址')
-				hideLoading('webdav')
+				Alert.alert('错误', 'URL格式不正确，请检查')
+				setIsLoading(false)
 				return
 			}
 
-			const serverConfig = {
-				name: name.trim(),
-				url: fullUrl,
-				username: username.trim(),
-				password: password.trim(),
-				isDefault,
-			}
-
+			// 创建或更新服务器
 			if (initialServer) {
-				await updateWebDAVServer(initialServer.name, serverConfig)
-				showToast('服务器配置已更新')
+				// 更新现有服务器
+				await updateWebDAVServer(initialServer.id, {
+					name: name.trim(),
+					url: fullUrl,
+					username: username.trim(),
+					password: password,
+					isDefault,
+				})
+
+				showToast('服务器更新成功', 'success')
+				onClose(true)
 			} else {
-				await addWebDAVServer(serverConfig)
-				showToast('服务器配置已保存')
-			}
+				// 创建新服务器
+				const id = await addWebDAVServer({
+					name: name.trim(),
+					url: fullUrl,
+					username: username.trim(),
+					password: password,
+					isDefault,
+				})
 
-			if (isDefault) {
-				await setDefaultWebDAVServer(serverConfig.name)
+				if (id) {
+					showToast('服务器添加成功', 'success')
+					onClose(true)
+				} else {
+					Alert.alert('错误', '添加服务器失败')
+				}
 			}
-
-			hideLoading('webdav')
-			handleClose(true)
 		} catch (error) {
-			logError('保存服务器配置失败:', error)
-			setLoadingError('保存服务器配置失败: ' + (error.message || '未知错误'), 'webdav')
+			logError(`${initialServer ? '更新' : '添加'}服务器失败:`, error)
+			Alert.alert(
+				'错误',
+				`${initialServer ? '更新' : '添加'}服务器失败: ${error.message || '未知错误'}`,
+			)
+		} finally {
+			setIsLoading(false)
 		}
-	}, [name, url, isHttps, username, password, isDefault, initialServer, handleClose])
+	}, [name, url, isHttps, username, password, isDefault, initialServer, onClose])
 
-	const handleTest = useCallback(async () => {
-		if (!url) {
-			Alert.alert('错误', '请先输入服务器地址')
+	// 新增：测试连接函数
+	const handleTestConnection = useCallback(async () => {
+		if (!url.trim()) {
+			Alert.alert('错误', '请输入有效的服务器地址')
 			return
 		}
 
 		try {
-			showLoading('正在测试服务器连接...', { type: 'webdav' })
+			setIsTesting(true)
 
+			// 清理URL，先移除可能已有的协议前缀
 			let cleanUrl = url.trim()
 			cleanUrl = cleanUrl.replace(/^https?:\/\//i, '')
+
+			// 如果清理后为空
+			if (!cleanUrl) {
+				Alert.alert('错误', '请输入有效的服务器地址')
+				setIsTesting(false)
+				return
+			}
+
+			// 构建完整URL，添加协议
 			const fullUrl = (isHttps ? 'https://' : 'http://') + cleanUrl
 
-			await connectToServer({
+			// 创建临时服务器配置对象
+			const testServer = {
+				id: 'test_temp_id',
+				name: name.trim() || '测试服务器',
 				url: fullUrl,
 				username: username.trim(),
-				password: password.trim(),
-			})
+				password: password,
+			}
 
-			hideLoading('webdav')
-			showToast('连接测试成功')
+			// 导入验证函数
+			const { createClient } = await import('webdav')
+
+			// 创建WebDAV客户端配置
+			const clientOptions = {
+				username: testServer.username || '',
+				password: testServer.password || '',
+				maxBodyLength: 1024 * 1024 * 50, // 50MB
+				maxContentLength: 1024 * 1024 * 50, // 50MB
+			}
+
+			// 创建测试客户端
+			const testClient = createClient(testServer.url, clientOptions)
+
+			// 测试连接
+			try {
+				await testClient.getDirectoryContents('/')
+				Alert.alert('成功', '服务器连接测试成功！')
+			} catch (testError) {
+				let errorMessage = '服务器连接测试失败'
+
+				if (testError.status === 401) {
+					errorMessage = '授权失败: 请检查用户名和密码'
+				} else if (testError.status === 404) {
+					errorMessage = '服务器路径不存在: 请检查URL路径'
+				} else if (testError.message && testError.message.includes('ENOTFOUND')) {
+					errorMessage = '找不到服务器: 请检查主机名是否正确'
+				} else if (testError.message && testError.message.includes('ECONNREFUSED')) {
+					errorMessage = '连接被拒绝: 服务器可能未运行或端口被阻止'
+				} else if (testError.message && testError.message.includes('certificate')) {
+					errorMessage = 'SSL证书错误: 服务器证书无效或不受信任'
+				}
+
+				Alert.alert('连接失败', `${errorMessage}: ${testError.message || '未知错误'}`)
+			}
 		} catch (error) {
-			logError('服务器连接测试失败:', error)
-			setLoadingError('连接测试失败: ' + (error.message || '未知错误'), 'webdav')
+			Alert.alert('错误', `测试连接失败: ${error.message || '未知错误'}`)
+		} finally {
+			setIsTesting(false)
 		}
-	}, [url, isHttps, username, password])
+	}, [name, url, isHttps, username, password])
 
-	const { isLoading } = useLoading('webdav')
+	if (!isVisible) return null
 
 	return (
-		<Modal visible={isVisible} animationType="slide" transparent>
-			<View style={styles.modalContainer}>
+		<Modal
+			visible={isVisible}
+			transparent={true}
+			animationType="slide"
+			onRequestClose={() => handleClose(false)}
+			statusBarTranslucent={true}
+		>
+			<View style={styles.modalOverlay}>
 				<View style={styles.modalContent}>
-					<View style={styles.modalHeader}>
-						<Text style={styles.modalTitle}>{initialServer ? '编辑服务器' : '添加服务器'}</Text>
-						<TouchableOpacity
-							onPress={() => handleClose(false)}
-							style={styles.closeButton}
-							disabled={isLoading}
-						>
-							<Ionicons name="close" size={24} color={colors.text} />
-						</TouchableOpacity>
+					<Text style={styles.modalTitle}>{initialServer ? '编辑服务器' : '添加服务器'}</Text>
+
+					<Text style={styles.inputLabel}>服务器名称</Text>
+					<TextInput
+						style={styles.input}
+						value={name}
+						onChangeText={setName}
+						placeholder="例如: 我的WebDAV服务器"
+						placeholderTextColor="#666"
+					/>
+
+					<Text style={styles.inputLabel}>服务器地址</Text>
+					<View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 16 }}>
+						{/* 协议选择器 */}
+						<View style={styles.protocolSelector}>
+							<TouchableOpacity
+								style={[styles.protocolOption, isHttps ? styles.protocolOptionSelected : null]}
+								onPress={() => setIsHttps(true)}
+							>
+								<Text style={[styles.protocolText, isHttps ? styles.protocolTextSelected : null]}>
+									HTTPS://
+								</Text>
+							</TouchableOpacity>
+							<TouchableOpacity
+								style={[styles.protocolOption, !isHttps ? styles.protocolOptionSelected : null]}
+								onPress={() => setIsHttps(false)}
+							>
+								<Text style={[styles.protocolText, !isHttps ? styles.protocolTextSelected : null]}>
+									HTTP://
+								</Text>
+							</TouchableOpacity>
+						</View>
+
+						{/* URL输入框 */}
+						<TextInput
+							style={[styles.input, { flex: 1, marginBottom: 0 }]}
+							value={url}
+							onChangeText={setUrl}
+							placeholder="example.com/webdav"
+							placeholderTextColor="#666"
+							autoCapitalize="none"
+						/>
 					</View>
 
-					<View style={styles.formContainer}>
-						<View style={styles.inputContainer}>
-							<Text style={styles.label}>服务器名称</Text>
-							<TextInput
-								style={styles.input}
-								value={name}
-								onChangeText={setName}
-								placeholder="输入服务器名称"
-								placeholderTextColor={colors.textMuted}
-								editable={!isLoading}
-							/>
-						</View>
+					<Text style={styles.inputLabel}>用户名 (可选)</Text>
+					<TextInput
+						style={styles.input}
+						value={username}
+						onChangeText={setUsername}
+						placeholder="WebDAV用户名"
+						placeholderTextColor="#666"
+						autoCapitalize="none"
+					/>
 
-						<View style={styles.inputContainer}>
-							<Text style={styles.label}>服务器地址</Text>
-							<View style={styles.urlContainer}>
-								<TouchableOpacity
-									style={styles.protocolButton}
-									onPress={() => setIsHttps(!isHttps)}
-									disabled={isLoading}
-								>
-									<Text style={styles.protocolText}>{isHttps ? 'https://' : 'http://'}</Text>
-								</TouchableOpacity>
-								<TextInput
-									style={[styles.input, styles.urlInput]}
-									value={url}
-									onChangeText={setUrl}
-									placeholder="example.com/webdav"
-									placeholderTextColor={colors.textMuted}
-									editable={!isLoading}
-								/>
-							</View>
-						</View>
+					<Text style={styles.inputLabel}>密码 (可选)</Text>
+					<TextInput
+						style={styles.input}
+						value={password}
+						onChangeText={setPassword}
+						placeholder="WebDAV密码"
+						placeholderTextColor="#666"
+						secureTextEntry
+					/>
 
-						<View style={styles.inputContainer}>
-							<Text style={styles.label}>用户名</Text>
-							<TextInput
-								style={styles.input}
-								value={username}
-								onChangeText={setUsername}
-								placeholder="输入用户名"
-								placeholderTextColor={colors.textMuted}
-								editable={!isLoading}
-							/>
-						</View>
-
-						<View style={styles.inputContainer}>
-							<Text style={styles.label}>密码</Text>
-							<TextInput
-								style={styles.input}
-								value={password}
-								onChangeText={setPassword}
-								placeholder="输入密码"
-								placeholderTextColor={colors.textMuted}
-								secureTextEntry
-								editable={!isLoading}
-							/>
-						</View>
-
-						<View style={styles.switchContainer}>
-							<Text style={styles.label}>设为默认服务器</Text>
-							<Switch value={isDefault} onValueChange={setIsDefault} disabled={isLoading} />
-						</View>
+					<View
+						style={{
+							flexDirection: 'row',
+							alignItems: 'center',
+							marginBottom: 16,
+							justifyContent: 'space-between',
+						}}
+					>
+						<Text style={styles.switchLabel}>设为默认服务器</Text>
+						<Switch
+							value={isDefault}
+							onValueChange={setIsDefault}
+							trackColor={{ false: '#767577', true: colors.primary }}
+						/>
 					</View>
 
-					<View style={styles.buttonContainer}>
+					{/* 按钮区域 */}
+					<View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+						{/* 测试连接按钮 */}
 						<TouchableOpacity
 							style={[styles.button, styles.testButton]}
-							onPress={handleTest}
-							disabled={isLoading}
+							onPress={handleTestConnection}
+							disabled={isTesting || isLoading}
 						>
-							<Text style={styles.buttonText}>测试连接</Text>
+							{isTesting ? (
+								<ActivityIndicator size="small" color="white" />
+							) : (
+								<Text style={styles.buttonText}>测试连接</Text>
+							)}
 						</TouchableOpacity>
-						<TouchableOpacity
-							style={[styles.button, styles.saveButton]}
-							onPress={handleSave}
-							disabled={isLoading}
-						>
-							<Text style={styles.buttonText}>保存</Text>
-						</TouchableOpacity>
+
+						<View style={{ flexDirection: 'row' }}>
+							<TouchableOpacity
+								style={[styles.button, styles.cancelButton]}
+								onPress={() => handleClose(false)}
+								disabled={isLoading}
+							>
+								<Text style={styles.buttonText}>取消</Text>
+							</TouchableOpacity>
+
+							<TouchableOpacity
+								style={[styles.button, styles.saveButton, isLoading && styles.buttonDisabled]}
+								onPress={handleSave}
+								disabled={isLoading}
+							>
+								{isLoading ? (
+									<ActivityIndicator size="small" color="white" />
+								) : (
+									<Text style={styles.buttonText}>保存</Text>
+								)}
+							</TouchableOpacity>
+						</View>
 					</View>
 				</View>
 			</View>
@@ -443,23 +537,28 @@ const WebDAVModal = () => {
 	const router = useRouter()
 	const insets = useSafeAreaInsets()
 	const [servers, setServers] = useState<WebDAVServer[]>([])
+	const [isLoading, setIsLoading] = useState(true)
 	const [modalVisible, setModalVisible] = useState(false)
 	const [selectedServer, setSelectedServer] = useState<WebDAVServer | null>(null)
 	const [currentServerState, setCurrentServerState] = useState<WebDAVServer | null>(null)
 	const [isComponentMounted, setIsComponentMounted] = useState(false)
+	const [loadError, setLoadError] = useState<string | null>(null)
 	const [error, setError] = useState<string | null>(null)
 	const [startY, setStartY] = useState(0)
 	const [currentY, setCurrentY] = useState(0)
 	const [isDragging, setIsDragging] = useState(false)
 	const [animatedValues, setAnimatedValues] = useState(null)
-	const [initialized, setInitialized] = useState(false)
+	const [initialized, setInitialized] = useState(false) // 添加初始化状态标志
 
 	// 组件挂载状态管理
 	useEffect(() => {
 		setIsComponentMounted(true)
+		
+		// 使用setTimeout确保UI渲染在下一个渲染周期
 		setTimeout(() => {
 			setInitialized(true)
 		}, 100)
+		
 		return () => {
 			setIsComponentMounted(false)
 		}
@@ -470,8 +569,8 @@ const WebDAVModal = () => {
 		try {
 			if (!isComponentMounted) return
 
-			showLoading('正在加载服务器列表...', { type: 'webdav' })
-			setError(null)
+			setIsLoading(true)
+			setLoadError(null)
 
 			// 获取最新的服务器列表
 			const serversList = getWebDAVServers()
@@ -481,155 +580,443 @@ const WebDAVModal = () => {
 			const current = getCurrentWebDAVServer()
 			setCurrentServerState(current)
 
-			hideLoading('webdav')
 			logInfo('WebDAV设置: 已加载服务器列表', { count: serversList.length })
 		} catch (err) {
 			logError('WebDAV设置: 加载服务器列表失败', err)
-			setLoadingError('加载服务器列表失败: ' + (err.message || '未知错误'), 'webdav')
+			setLoadError('加载服务器列表失败: ' + (err.message || '未知错误'))
+		} finally {
+			if (isComponentMounted) {
+				setIsLoading(false)
+			}
 		}
 	}, [isComponentMounted])
 
-	// 初始加载
+	// 安全地获取当前服务器
 	useEffect(() => {
 		loadServers()
 	}, [loadServers])
 
-	// 处理服务器删除
-	const handleDeleteServer = useCallback(
-		async (server: WebDAVServer) => {
+	// 全局错误处理
+	const safeAction = useCallback(
+		async (action: () => Promise<any>, successMessage?: string, errorPrefix?: string) => {
+			if (!isComponentMounted) return false
+
 			try {
-				showLoading('正在删除服务器...', { type: 'webdav' })
-				await deleteWebDAVServer(server.name)
-				showToast('服务器已删除')
-				await loadServers()
+				setIsLoading(true)
+				const result = await action()
+				if (successMessage && isComponentMounted) {
+					showToast(successMessage, 'success')
+				}
+				return result
 			} catch (error) {
-				logError('删除服务器失败:', error)
-				setLoadingError('删除服务器失败: ' + (error.message || '未知错误'), 'webdav')
+				logError(`${errorPrefix || '操作失败'}:`, error)
+				if (isComponentMounted) {
+					Alert.alert('错误', `${errorPrefix || '操作失败'}: ${error.message || '未知错误'}`)
+				}
+				return false
+			} finally {
+				if (isComponentMounted) {
+					setIsLoading(false)
+				}
 			}
 		},
-		[loadServers],
+		[isComponentMounted],
 	)
 
-	// 处理设置默认服务器
-	const handleSetDefault = useCallback(
-		async (server: WebDAVServer) => {
-			try {
-				showLoading('正在设置默认服务器...', { type: 'webdav' })
-				await setDefaultWebDAVServer(server.name)
-				showToast('已设置为默认服务器')
-				await loadServers()
-			} catch (error) {
-				logError('设置默认服务器失败:', error)
-				setLoadingError('设置默认服务器失败: ' + (error.message || '未知错误'), 'webdav')
-			}
-		},
-		[loadServers],
-	)
-
-	// 处理服务器测试
-	const handleTestServer = useCallback(async (server: WebDAVServer) => {
+	const handleAddServer = useCallback(() => {
 		try {
-			showLoading('正在测试服务器连接...', { type: 'webdav' })
-			await connectToServer(server)
-			hideLoading('webdav')
-			showToast('连接测试成功')
+			if (!isComponentMounted) return
+			setSelectedServer(null)
+			setModalVisible(true)
 		} catch (error) {
-			logError('服务器连接测试失败:', error)
-			setLoadingError('连接测试失败: ' + (error.message || '未知错误'), 'webdav')
+			logError('打开添加服务器模态框失败:', error)
 		}
+	}, [isComponentMounted])
+
+	const handleEditServer = useCallback(
+		(server: WebDAVServer) => {
+			try {
+				if (!isComponentMounted || !server) return
+				setSelectedServer(server)
+				setModalVisible(true)
+			} catch (error) {
+				logError('打开编辑服务器模态框失败:', error)
+			}
+		},
+		[isComponentMounted],
+	)
+
+	const handleDeleteServer = useCallback(
+		(server: WebDAVServer) => {
+			if (!isComponentMounted || !server) return
+
+			try {
+				Alert.alert('删除服务器', `确定要删除服务器 "${server.name || '未命名'}" 吗？`, [
+					{ text: '取消', style: 'cancel' },
+					{
+						text: '删除',
+						style: 'destructive',
+						onPress: async () => {
+							await safeAction(
+								async () => deleteWebDAVServer(server.id),
+								'服务器已删除',
+								'删除服务器失败',
+							)
+						},
+					},
+				])
+			} catch (error) {
+				logError('处理删除服务器失败:', error)
+			}
+		},
+		[safeAction, isComponentMounted],
+	)
+
+	const handleSetDefault = useCallback(
+		async (serverId: string) => {
+			return await safeAction(
+				async () => {
+					if (!isComponentMounted) return false
+
+					logInfo('WebDAV设置: 设置默认服务器', { serverId })
+					const result = await setDefaultWebDAVServer(serverId)
+
+					// 重新加载服务器列表
+					await loadServers()
+
+					return result
+				},
+				'设置默认服务器成功',
+				'设置默认服务器失败',
+			)
+		},
+		[isComponentMounted, safeAction, loadServers],
+	)
+
+	const handleTestServer = useCallback(
+		(server: WebDAVServer) => {
+			if (!isComponentMounted || !server) return
+
+			safeAction(
+				async () => {
+					try {
+						await connectToServer(server)
+						return true
+					} catch (error) {
+						throw new Error(`连接测试失败: ${error.message || '未知错误'}`)
+					}
+				},
+				'连接测试成功',
+				'连接测试失败',
+			)
+		},
+		[safeAction, isComponentMounted],
+	)
+
+	const handleCloseModal = useCallback(
+		(shouldRefresh: boolean) => {
+			try {
+				if (!isComponentMounted) return
+
+				// 先关闭模态窗口
+				setModalVisible(false)
+
+				// 如果需要刷新,执行刷新
+				if (shouldRefresh) {
+					loadServers()
+				}
+
+				// 延迟执行返回,确保模态窗口已经关闭
+				setTimeout(() => {
+					if (isComponentMounted) {
+						try {
+							if (router) {
+								router.back()
+							} else {
+								logError('WebDAV模态窗口: router未定义，无法返回')
+							}
+						} catch (navError) {
+							logError('WebDAV模态窗口: 返回导航失败', navError)
+							// 尝试备用方案
+							try {
+								if (typeof window !== 'undefined' && window.history && window.history.back) {
+									window.history.back()
+								}
+							} catch (backupError) {
+								logError('WebDAV模态窗口: 备用导航也失败', backupError)
+							}
+						}
+					}
+				}, 200) // 增加延迟以确保状态更新
+			} catch (error) {
+				logError('关闭模态窗口失败:', error)
+				// 发生错误时尝试强制返回
+				try {
+					router.back()
+				} catch (navError) {
+					logError('WebDAV模态窗口: 强制返回失败', navError)
+				}
+			}
+		},
+		[isComponentMounted, loadServers, router],
+	)
+
+	const handleGoBack = useCallback(() => {
+		try {
+			// 如果模态窗口打开,先关闭它
+			if (modalVisible) {
+				setModalVisible(false)
+				return
+			}
+
+			// 否则直接返回
+			router.back()
+		} catch (error) {
+			logError('返回失败:', error)
+			// 发生错误时尝试强制返回到主页
+			router.replace('/(tabs)')
+		}
+	}, [modalVisible, router])
+
+	// 使用useEffect安全地创建动画值
+	useEffect(() => {
+		let values = null
+		try {
+			if (Animated && Animated.useSharedValue) {
+				const translationY = Animated.useSharedValue(0)
+				values = { translationY }
+				logInfo('动画值创建成功')
+			}
+		} catch (error) {
+			logError('创建动画值失败:', error)
+		}
+		setAnimatedValues(values)
 	}, [])
 
-	// 处理模态窗口关闭
-	const handleModalClose = useCallback(
-		(shouldRefresh: boolean) => {
-			setModalVisible(false)
-			setSelectedServer(null)
-			if (shouldRefresh) {
-				loadServers()
+	// 监听返回键
+	useEffect(() => {
+		const backHandler = BackHandler.addEventListener('hardwareBackPress', () => {
+			if (modalVisible) {
+				handleCloseModal(false)
+				return true
 			}
-		},
-		[loadServers],
-	)
+			router.back()
+			return true
+		})
 
-	const { isLoading } = useLoading('webdav')
+		return () => backHandler.remove()
+	}, [handleCloseModal, router, modalVisible])
 
-	if (!initialized) {
+	// 备用触摸事件处理 - 如果手势库不可用
+	const handleTouchStart = (event) => {
+		setStartY(event.nativeEvent.pageY)
+		setCurrentY(event.nativeEvent.pageY)
+		setIsDragging(true)
+	}
+
+	const handleTouchMove = (event) => {
+		if (isDragging) {
+			setCurrentY(event.nativeEvent.pageY)
+		}
+	}
+
+	const handleTouchEnd = () => {
+		if (isDragging) {
+			const diff = currentY - startY
+			if (diff > 50) {
+				// 向下滑动超过阈值，关闭模态窗口
+				router.back()
+			}
+			setIsDragging(false)
+		}
+	}
+
+	// 条件渲染容器 - 基于是否有手势库
+	const renderContainer = (children) => {
+		try {
+			// 如果手势库和动画值都可用
+			if (GestureHandler && Animated && animatedValues && animatedValues.translationY) {
+				// 创建手势处理器
+				const gestureHandler = Animated.useAnimatedGestureHandler({
+					onStart: (_event, ctx) => {
+						ctx.startY = animatedValues.translationY.value
+					},
+					onActive: (event, ctx) => {
+						if (event.translationY > 0) {
+							// 只允许向下拖动
+							animatedValues.translationY.value = ctx.startY + event.translationY
+						}
+					},
+					onEnd: (event) => {
+						if (event.translationY > 100) {
+							// 关闭模态窗口
+							router.back()
+						} else {
+							// 回弹到起始位置
+							Animated.withSpring(animatedValues.translationY, {
+								toValue: 0,
+								damping: 20,
+								stiffness: 200,
+							})
+						}
+					},
+				})
+
+				// 创建动画样式
+				const animatedStyle = Animated.useAnimatedStyle(() => {
+					return {
+						transform: [{ translateY: animatedValues.translationY.value }],
+					}
+				})
+
+				// 使用手势处理器和动画
+				return (
+					<GestureHandler onGestureEvent={gestureHandler}>
+						<Animated.View style={[styles.container, animatedStyle]}>
+							<View style={styles.handle} />
+							{children}
+						</Animated.View>
+					</GestureHandler>
+				)
+			}
+		} catch (error) {
+			logError('渲染手势容器失败，使用备用方案:', error)
+		}
+
+		// 备用方案 - 使用基础触摸事件
 		return (
-			<View style={styles.loadingContainer}>
-				<ActivityIndicator size="large" color={colors.primary} />
-				<Text style={styles.loadingText}>正在加载...</Text>
+			<View
+				style={styles.container}
+				onTouchStart={handleTouchStart}
+				onTouchMove={handleTouchMove}
+				onTouchEnd={handleTouchEnd}
+			>
+				<View style={styles.handle} />
+				{children}
 			</View>
+		)
+	}
+
+	// 如果没有服务器，显示添加服务器的引导信息
+	if (!servers || !Array.isArray(servers) || servers.length === 0) {
+		return renderContainer(
+			<>
+				<View style={styles.header}>
+					<Text style={styles.headerTitle}>WebDAV 服务器</Text>
+					<TouchableOpacity
+						style={styles.closeButton}
+						onPress={handleGoBack}
+						hitSlop={{ top: 10, right: 10, bottom: 10, left: 10 }}
+					>
+						<Ionicons name="close" size={24} color={colors.text} />
+					</TouchableOpacity>
+				</View>
+
+				<View style={styles.emptyContainer}>
+					<Ionicons name="cloud-outline" size={80} color="#999" />
+					<Text style={styles.emptyTitle}>没有添加 WebDAV 服务器</Text>
+					<Text style={styles.emptySubtitle}>
+						添加一个 WebDAV 服务器来访问和播放您的云端音乐文件
+					</Text>
+					<TouchableOpacity style={styles.addButton} onPress={handleAddServer}>
+						<Ionicons name="add" size={24} color="#fff" />
+						<Text style={styles.addButtonText}>添加服务器</Text>
+					</TouchableOpacity>
+				</View>
+
+				<ServerEditModal
+					isVisible={modalVisible}
+					onClose={handleCloseModal}
+					initialServer={selectedServer}
+					loadServers={loadServers}
+				/>
+			</>,
 		)
 	}
 
 	return (
 		<ErrorBoundary router={router}>
-			<View style={[styles.container, { paddingTop: insets.top }]}>
-				<View style={styles.header}>
-					<TouchableOpacity
-						style={styles.backButton}
-						onPress={() => router.back()}
-						disabled={isLoading}
-					>
-						<Ionicons name="arrow-back" size={24} color={colors.text} />
-					</TouchableOpacity>
-					<Text style={styles.title}>WebDAV设置</Text>
-					<TouchableOpacity style={styles.refreshButton} onPress={loadServers} disabled={isLoading}>
-						<Ionicons name="refresh" size={24} color={colors.text} />
-					</TouchableOpacity>
+			{!initialized ? (
+				<View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: colors.background }}>
+					<ActivityIndicator size="large" color={colors.primary} />
+					<Text style={{ marginTop: 16, color: colors.text }}>正在加载...</Text>
 				</View>
+			) : (
+				renderContainer(
+					<>
+						<View style={styles.header}>
+							<Text style={styles.headerTitle}>WebDAV 服务器</Text>
+							<TouchableOpacity
+								style={styles.closeButton}
+								onPress={handleGoBack}
+								hitSlop={{ top: 10, right: 10, bottom: 10, left: 10 }}
+							>
+								<Ionicons name="close" size={24} color={colors.text} />
+							</TouchableOpacity>
+						</View>
 
-				<TouchableOpacity
-					style={styles.addButton}
-					onPress={() => setModalVisible(true)}
-					disabled={isLoading}
-				>
-					<Text style={styles.addButtonText}>添加服务器</Text>
-				</TouchableOpacity>
-
-				{error ? (
-					<View style={styles.errorContainer}>
-						<Feather name="alert-circle" size={48} color="red" />
-						<Text style={styles.errorText}>{error}</Text>
-						<TouchableOpacity style={styles.retryButton} onPress={loadServers} disabled={isLoading}>
-							<Text style={styles.retryButtonText}>重试</Text>
-						</TouchableOpacity>
-					</View>
-				) : (
-					<FlatList
-						data={servers}
-						keyExtractor={(item) => item.name}
-						renderItem={({ item }) => (
-							<ServerItem
-								server={item}
-								onEdit={() => {
-									setSelectedServer(item)
-									setModalVisible(true)
-								}}
-								onDelete={() => handleDeleteServer(item)}
-								onSetDefault={() => handleSetDefault(item)}
-								onTest={() => handleTestServer(item)}
-								isCurrentServer={item.name === currentServerState?.name}
-							/>
-						)}
-						ListEmptyComponent={
+						{/* 服务器列表或添加服务器提示 */}
+						{!servers || !Array.isArray(servers) || servers.length === 0 ? (
 							<View style={styles.emptyContainer}>
-								<Text style={styles.emptyText}>没有WebDAV服务器</Text>
-								<Text style={styles.emptySubtext}>点击上方的"添加服务器"按钮添加一个服务器</Text>
+								<Ionicons name="cloud-outline" size={80} color="#999" />
+								<Text style={styles.emptyTitle}>没有添加 WebDAV 服务器</Text>
+								<Text style={styles.emptySubtitle}>
+									添加一个 WebDAV 服务器来访问和播放您的云端音乐文件
+								</Text>
+								<TouchableOpacity style={styles.addButton} onPress={handleAddServer}>
+									<Ionicons name="add" size={24} color="#fff" />
+									<Text style={styles.addButtonText}>添加服务器</Text>
+								</TouchableOpacity>
 							</View>
-						}
-						ItemSeparatorComponent={() => <View style={styles.separator} />}
-						contentContainerStyle={styles.listContent}
-					/>
-				)}
+						) : (
+							<>
+								<View style={styles.actionContainer}>
+									<TouchableOpacity style={styles.addButton} onPress={handleAddServer}>
+										<Text style={styles.addButtonText}>添加服务器</Text>
+									</TouchableOpacity>
+								</View>
 
-				<ServerEditModal
-					isVisible={modalVisible}
-					onClose={handleModalClose}
-					initialServer={selectedServer}
-					loadServers={loadServers}
-				/>
-			</View>
+								{isLoading ? (
+									<View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
+										<ActivityIndicator size="large" color={colors.accent} />
+										<Text style={{ marginTop: 20, fontSize: 16 }}>加载中...</Text>
+									</View>
+								) : (
+									<FlatList
+										data={servers}
+										renderItem={({ item }) => (
+											<ServerItem
+												server={item}
+												onEdit={handleEditServer}
+												onDelete={handleDeleteServer}
+												onSetDefault={handleSetDefault}
+												onTest={handleTestServer}
+												isCurrentServer={currentServerState?.id === item.id}
+											/>
+										)}
+										keyExtractor={(item) => item?.id || Math.random().toString()}
+										contentContainerStyle={styles.listContainer}
+										ItemSeparatorComponent={() => <View style={styles.separator} />}
+										ListEmptyComponent={
+											<View style={styles.emptyContainer}>
+												<Text style={styles.emptyText}>没有WebDAV服务器</Text>
+												<Text style={styles.emptySubtext}>点击上方的"添加服务器"按钮添加一个服务器</Text>
+											</View>
+										}
+									/>
+								)}
+							</>
+						)}
+
+						<ServerEditModal
+							isVisible={modalVisible}
+							onClose={handleCloseModal}
+							initialServer={selectedServer}
+							loadServers={loadServers}
+						/>
+					</>,
+				)
+			)}
 		</ErrorBoundary>
 	)
 }
@@ -726,7 +1113,7 @@ const styles = StyleSheet.create({
 		borderRadius: 5,
 		marginLeft: 8,
 	},
-	modalContainer: {
+	modalOverlay: {
 		flex: 1,
 		justifyContent: 'center',
 		alignItems: 'center',
@@ -739,57 +1126,68 @@ const styles = StyleSheet.create({
 		padding: 20,
 		maxHeight: '80%',
 	},
-	modalHeader: {
-		flexDirection: 'row',
-		alignItems: 'center',
-		marginBottom: 20,
-	},
 	modalTitle: {
 		fontSize: 20,
 		fontWeight: 'bold',
 		color: colors.text,
-	},
-	formContainer: {
-		// Add any necessary styles for the form container
-	},
-	inputContainer: {
-		marginBottom: 15,
-	},
-	label: {
-		fontSize: 14,
-		color: colors.text,
-		marginBottom: 5,
-	},
-	urlContainer: {
-		flexDirection: 'row',
-		alignItems: 'center',
-	},
-	protocolButton: {
-		padding: 8,
-		borderWidth: 1,
-		borderColor: '#444',
-		borderRadius: 4,
-		marginRight: 8,
-	},
-	protocolText: {
-		fontSize: 14,
-		color: colors.text,
+		marginBottom: 20,
+		textAlign: 'center',
 	},
 	input: {
 		backgroundColor: colors.item,
 		borderRadius: 5,
 		paddingHorizontal: 15,
 		paddingVertical: 10,
+		marginBottom: 15,
 		color: colors.text,
 	},
+	inputLabel: {
+		fontSize: 14,
+		color: colors.text,
+		marginBottom: 5,
+	},
+	urlInputContainer: {
+		marginBottom: 15,
+	},
+	protocolSelector: {
+		flexDirection: 'row',
+		marginRight: 8,
+		borderRadius: 4,
+		borderWidth: 1,
+		borderColor: '#444',
+		overflow: 'hidden',
+	},
+	protocolOption: {
+		paddingHorizontal: 8,
+		paddingVertical: 6,
+		backgroundColor: '#333',
+	},
+	protocolOptionSelected: {
+		backgroundColor: colors.primary,
+	},
+	protocolText: {
+		color: colors.text,
+		fontSize: 14,
+	},
+	protocolTextSelected: {
+		color: 'white',
+	},
 	urlInput: {
-		flex: 1,
+		backgroundColor: colors.item,
+		borderRadius: 5,
+		paddingHorizontal: 15,
+		paddingVertical: 10,
+		color: colors.text,
 	},
 	switchContainer: {
 		flexDirection: 'row',
 		justifyContent: 'space-between',
 		alignItems: 'center',
 		marginBottom: 20,
+	},
+	switchLabel: {
+		fontSize: 14,
+		color: colors.text,
 	},
 	buttonContainer: {
 		flexDirection: 'row',
@@ -802,6 +1200,9 @@ const styles = StyleSheet.create({
 		borderRadius: 5,
 		marginHorizontal: 5,
 	},
+	cancelButton: {
+		backgroundColor: '#999',
+	},
 	saveButton: {
 		backgroundColor: colors.accent,
 	},
@@ -809,17 +1210,33 @@ const styles = StyleSheet.create({
 		color: '#fff',
 		fontWeight: 'bold',
 	},
-	testButton: {
-		backgroundColor: '#0066cc',
-		paddingVertical: 10,
-		paddingHorizontal: 16,
-		borderRadius: 6,
-	},
-	handle: {
-		height: 5,
-		backgroundColor: colors.border,
-		borderRadius: 2.5,
+	emptyTitle: {
+		fontSize: 24,
+		fontWeight: 'bold',
+		color: colors.text,
 		marginBottom: 10,
+	},
+	emptySubtitle: {
+		fontSize: 16,
+		color: colors.subtext,
+		textAlign: 'center',
+	},
+	backButton: {
+		position: 'absolute',
+		top: 0,
+		left: 0,
+		padding: 10,
+	},
+	title: {
+		fontSize: 34,
+		fontWeight: 'bold',
+		color: colors.text,
+	},
+	refreshButton: {
+		position: 'absolute',
+		top: 0,
+		right: 0,
+		padding: 10,
 	},
 	loadingContainer: {
 		flex: 1,
@@ -830,7 +1247,7 @@ const styles = StyleSheet.create({
 		fontSize: 18,
 		fontWeight: 'bold',
 		color: colors.text,
-		marginTop: 16,
+		marginTop: 20,
 	},
 	errorContainer: {
 		flex: 1,
@@ -842,7 +1259,7 @@ const styles = StyleSheet.create({
 		fontSize: 18,
 		fontWeight: 'bold',
 		color: colors.text,
-		marginBottom: 10,
+		marginBottom: 20,
 	},
 	retryButton: {
 		backgroundColor: colors.accent,
@@ -853,21 +1270,25 @@ const styles = StyleSheet.create({
 		color: '#fff',
 		fontWeight: 'bold',
 	},
-	backButton: {
-		padding: 10,
+	separator: {
+		height: 1,
+		backgroundColor: colors.border,
+		marginVertical: 10,
 	},
-	title: {
-		fontSize: 20,
-		fontWeight: 'bold',
-		color: colors.text,
-		marginLeft: 10,
+	testButton: {
+		backgroundColor: '#0066cc',
+		paddingVertical: 10,
+		paddingHorizontal: 16,
+		borderRadius: 6,
 	},
-	refreshButton: {
-		padding: 10,
+	buttonDisabled: {
+		backgroundColor: '#ccc',
 	},
-	listContent: {
-		paddingHorizontal: 20,
-		paddingBottom: 20,
+	handle: {
+		height: 5,
+		backgroundColor: colors.border,
+		borderRadius: 2.5,
+		marginBottom: 10,
 	},
 })
 
